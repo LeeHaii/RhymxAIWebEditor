@@ -1,0 +1,200 @@
+import React, { DragEvent, useState } from 'react'
+import { FileAudio, Film, Image as ImageIcon, Music2, Plus, Trash2, Upload } from 'lucide-react'
+import { LibraryAsset, MediaKind } from '../../types/editor'
+import { useEditorStore } from '../../store/useEditorStore'
+
+type FileWithPath = File & { path?: string }
+type MediaFilter = 'all' | 'video' | 'image' | 'audio'
+
+const videoExtensions = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi'])
+const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+
+function classify(name: string): MediaKind {
+  const extension = name.split('.').pop()?.toLowerCase() || ''
+  if (videoExtensions.has(extension)) return 'video'
+  if (imageExtensions.has(extension)) return 'image'
+  return 'music'
+}
+
+function fileUrl(filePath: string) {
+  if (/^https?:\/\//.test(filePath) || filePath.startsWith('file:')) return filePath
+  return encodeURI(`file:///${filePath.replace(/\\/g, '/')}`)
+}
+
+export default function MediaBin() {
+  const {
+    mediaLibrary,
+    activeSceneId,
+    addMediaAssets,
+    removeMediaAsset,
+    assignMediaToScene,
+    addAudioClip,
+  } = useEditorStore()
+  const [filter, setFilter] = useState<MediaFilter>('all')
+  const [isDragging, setIsDragging] = useState(false)
+
+  const addFiles = (files: Array<{ path: string; name: string; kind: MediaKind }>) => {
+    addMediaAssets(
+      files.map((file) => ({
+        ...file,
+        id: crypto.randomUUID(),
+      }))
+    )
+  }
+
+  const importFiles = async () => addFiles(await window.electronAPI.openMediaFiles())
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(event.dataTransfer.files)
+      .map((file) => {
+        const fileWithPath = file as FileWithPath
+        return fileWithPath.path
+          ? { path: fileWithPath.path, name: file.name, kind: classify(file.name) }
+          : null
+      })
+      .filter((file): file is NonNullable<typeof file> => Boolean(file))
+    addFiles(files)
+  }
+
+  const visibleAssets = mediaLibrary.filter((asset) => {
+    if (filter === 'all') return true
+    if (filter === 'audio') return asset.kind === 'music' || asset.kind === 'sfx'
+    return asset.kind === filter
+  })
+
+  const placeVisual = (asset: LibraryAsset) => {
+    if (!activeSceneId) {
+      alert('Select a scene on the timeline first.')
+      return
+    }
+    if (asset.kind !== 'image' && asset.kind !== 'video') return
+    assignMediaToScene(activeSceneId, {
+      id: asset.id,
+      type: asset.kind === 'video' ? 'local_video' : 'local_image',
+      kind: asset.kind,
+      sourceUrl: asset.path,
+      thumbnailUrl: asset.path,
+      title: asset.name,
+      imageFit: 'cover',
+      enableKenBurnsEffect: asset.kind === 'image',
+    })
+  }
+
+  return (
+    <aside
+      onDragOver={(event) => {
+        event.preventDefault()
+        setIsDragging(true)
+      }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={onDrop}
+      className={`w-64 shrink-0 bg-[#111319] border-r border-white/5 flex flex-col ${
+        isDragging ? 'ring-2 ring-inset ring-violet-500' : ''
+      }`}
+    >
+      <div className="p-4 border-b border-white/5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-sm font-semibold">Media</h2>
+            <p className="text-[10px] text-slate-600 mt-0.5">{mediaLibrary.length} imported files</p>
+          </div>
+          <button
+            onClick={importFiles}
+            title="Import media"
+            className="h-8 w-8 rounded-lg bg-violet-600 hover:bg-violet-500 flex items-center justify-center transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid grid-cols-4 gap-1 rounded-lg bg-black/20 p-1">
+          {(['all', 'video', 'image', 'audio'] as MediaFilter[]).map((item) => (
+            <button
+              key={item}
+              onClick={() => setFilter(item)}
+              className={`rounded-md py-1.5 text-[10px] capitalize transition-colors ${
+                filter === item ? 'bg-white/10 text-white' : 'text-slate-600 hover:text-slate-300'
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+        {visibleAssets.length === 0 ? (
+          <button
+            onClick={importFiles}
+            className="w-full h-32 rounded-xl border border-dashed border-white/10 hover:border-violet-500/30 flex flex-col items-center justify-center text-slate-600 hover:text-slate-400 transition-colors"
+          >
+            <Upload className="h-6 w-6 mb-2" />
+            <span className="text-[11px]">Import or drop media</span>
+          </button>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {visibleAssets.map((asset) => (
+              <div key={asset.id} className="group rounded-lg border border-white/5 bg-black/20 overflow-hidden">
+                <button
+                  onClick={() => {
+                    if (asset.kind === 'video' || asset.kind === 'image') placeVisual(asset)
+                  }}
+                  className="w-full aspect-video bg-black/40 flex items-center justify-center overflow-hidden"
+                  title={
+                    asset.kind === 'video' || asset.kind === 'image'
+                      ? 'Add to selected scene'
+                      : 'Audio asset'
+                  }
+                >
+                  {asset.kind === 'image' ? (
+                    <img src={fileUrl(asset.path)} className="w-full h-full object-cover" alt="" />
+                  ) : asset.kind === 'video' ? (
+                    <video src={fileUrl(asset.path)} className="w-full h-full object-cover" muted />
+                  ) : asset.kind === 'sfx' ? (
+                    <FileAudio className="h-6 w-6 text-amber-400" />
+                  ) : (
+                    <Music2 className="h-6 w-6 text-emerald-400" />
+                  )}
+                </button>
+                <div className="p-2">
+                  <div className="text-[10px] truncate text-slate-300">{asset.name}</div>
+                  {(asset.kind === 'music' || asset.kind === 'sfx') && (
+                    <div className="flex gap-1 mt-1.5">
+                      <button
+                        onClick={() => addAudioClip({ ...asset, kind: 'music' })}
+                        className="flex-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 py-1 text-[8px] text-emerald-300"
+                      >
+                        + Music
+                      </button>
+                      <button
+                        onClick={() => addAudioClip({ ...asset, kind: 'sfx' })}
+                        className="flex-1 rounded bg-amber-500/10 hover:bg-amber-500/20 py-1 text-[8px] text-amber-300"
+                      >
+                        + SFX
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-[9px] uppercase text-slate-600">{asset.kind}</span>
+                    <button
+                      onClick={() => removeMediaAsset(asset.id)}
+                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-red-400 transition-all"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-white/5 p-3 text-[10px] text-slate-600 flex items-center gap-2">
+        <Film className="h-3 w-3" />
+        Select a scene, then click visual media
+      </div>
+    </aside>
+  )
+}
