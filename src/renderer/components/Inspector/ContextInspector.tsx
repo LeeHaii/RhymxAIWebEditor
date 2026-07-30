@@ -89,7 +89,7 @@ export default function ContextInspector() {
           throw new Error('Add a Pexels API key in Settings before searching Pexels Video.')
         }
         const response = await fetch(
-          `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=12`,
+          `https://api.pexels.com/v1/videos/search?query=${encodeURIComponent(query)}&per_page=12&orientation=landscape&size=medium`,
           { headers: { Authorization: apiKeys.pexels.trim() } }
         )
         if (!response.ok) throw new Error(`Pexels search failed (${response.status}).`)
@@ -139,6 +139,9 @@ export default function ContextInspector() {
       title: video.user?.name || video.url,
       sourceStartSec: 0,
       sourceDurationSec: Number(video.duration) || activeScene?.durationSec,
+      providerUrl: video.url,
+      creatorName: video.user?.name,
+      creatorUrl: video.user?.url,
     })
   }
 
@@ -568,6 +571,18 @@ function SceneProperties({
               <div className="mt-1 truncate text-[11px] text-slate-300">
                 {scene.media.title}
               </div>
+              {scene.media.providerUrl && (
+                <a
+                  href={scene.media.providerUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-block text-[9px] text-violet-400 hover:text-violet-300"
+                >
+                  {scene.media.creatorName
+                    ? `Video by ${scene.media.creatorName} on Pexels`
+                    : 'View source on Pexels'}
+                </a>
+              )}
               {scene.media.sourceDurationSec && (
                 <div className="mt-0.5 text-[9px] text-slate-600">
                   Source {(scene.media.sourceStartSec ?? 0).toFixed(2)}s –{' '}

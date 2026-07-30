@@ -1,5 +1,5 @@
-import React, { DragEvent, useMemo, useState } from 'react'
-import { ArrowLeft, AudioLines, FileAudio, FolderOpen, KeyRound, Sparkles } from 'lucide-react'
+import React, { DragEvent, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, AudioLines, FileAudio, FolderOpen, KeyRound, Sparkles, Video } from 'lucide-react'
 import { getProjectDocument, useEditorStore } from '../../store/useEditorStore'
 
 type FileWithPath = File & { path?: string }
@@ -15,10 +15,27 @@ export default function NewProject() {
     setScenes,
     setIsProcessingAudio,
     setProcessingError,
+    setProcessingStage,
+    setProcessingProgress,
+    setEditorNotice,
   } = useEditorStore()
   const [name, setName] = useState(projectName || `My video ${new Date().toLocaleDateString()}`)
   const [selectedAudio, setSelectedAudio] = useState(audioFile)
   const [isDragging, setIsDragging] = useState(false)
+  const [autoStockEnabled, setAutoStockEnabled] = useState(true)
+
+  useEffect(() => {
+    window.electronAPI
+      .getAppSettings()
+      .then((settings) => setAutoStockEnabled(settings.autoStockEnabled))
+    window.electronAPI.onPexelsAutoMatchProgress((progress) => {
+      setProcessingProgress({
+        completed: progress.completed,
+        total: progress.total,
+        matched: progress.matched,
+      })
+    })
+  }, [setProcessingProgress])
 
   const fileName = useMemo(
     () => selectedAudio?.path.split(/[\\/]/).pop() || '',
@@ -30,7 +47,7 @@ export default function NewProject() {
     if (file) setSelectedAudio(file)
   }
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
     const file = event.dataTransfer.files[0] as FileWithPath | undefined
@@ -40,7 +57,10 @@ export default function NewProject() {
       alert('Please drop a supported audio file.')
       return
     }
-    setSelectedAudio({ path: file.path, duration: 0 })
+    setSelectedAudio({
+      path: file.path,
+      duration: (await window.electronAPI.getMediaDuration(file.path)) || 0,
+    })
   }
 
   const createProject = async () => {
@@ -52,13 +72,20 @@ export default function NewProject() {
       alert('Enter a Gemini API key to transcribe your voiceover.')
       return
     }
+    if (autoStockEnabled && !apiKeys.pexels.trim()) {
+      alert('Enter a Pexels API key, or turn off automatic stock footage.')
+      return
+    }
 
     await window.electronAPI.setGeminiKey(apiKeys.gemini.trim())
+    if (autoStockEnabled) {
+      await window.electronAPI.setPexelsKey(apiKeys.pexels.trim())
+    }
     beginProject(name, selectedAudio)
 
     try {
       const result = await window.electronAPI.transcribeAudio(selectedAudio.path, apiKeys.gemini)
-      const scenes = result.map((scene, index) => ({
+      let scenes = result.map((scene, index) => ({
         ...scene,
         id: scene.id || `scene_${index + 1}`,
         media: scene.media || null,
@@ -66,7 +93,30 @@ export default function NewProject() {
       if (scenes.length === 0) {
         throw new Error('Gemini returned an empty transcript.')
       }
+      if (autoStockEnabled) {
+        setProcessingStage('matching-stock')
+        setProcessingProgress({ completed: 0, total: scenes.length, matched: 0 })
+        try {
+          const stockResult = await window.electronAPI.autoMatchPexelsVideos(
+            scenes,
+            apiKeys.pexels
+          )
+          scenes = stockResult.scenes
+          setEditorNotice(
+            stockResult.unmatchedCount === 0
+              ? `Pexels matched all ${stockResult.matchedCount} scenes automatically.`
+              : `Pexels matched ${stockResult.matchedCount} of ${scenes.length} scenes. Unmatched scenes are ready for manual media.`
+          )
+        } catch (stockError) {
+          const message =
+            stockError instanceof Error ? stockError.message : String(stockError)
+          setEditorNotice(
+            `Transcription succeeded, but automatic Pexels matching could not finish: ${message}`
+          )
+        }
+      }
       setScenes(scenes)
+      setProcessingStage('saving')
       setIsProcessingAudio(false)
       setScreen('editor')
       const project = getProjectDocument()
@@ -163,9 +213,50 @@ export default function NewProject() {
               </p>
             </div>
 
+            <div className="mt-5 rounded-xl border border-white/8 bg-black/15 p-4">
+              <label className="flex items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <Video className="h-4 w-4 text-violet-400 mt-0.5" />
+                  <div>
+                    <div className="text-xs font-medium text-slate-300">
+                      Automatically add Pexels stock video
+                    </div>
+                    <div className="text-[10px] text-slate-600 mt-1">
+                      Matches each timed scene using Gemini’s recommended search keywords.
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoStockEnabled}
+                  onChange={(event) => setAutoStockEnabled(event.target.checked)}
+                  className="h-4 w-4 accent-violet-500"
+                />
+              </label>
+              {autoStockEnabled && (
+                <label className="block mt-4 text-[10px] text-slate-500">
+                  Pexels API key
+                  <input
+                    type="password"
+                    value={apiKeys.pexels}
+                    onChange={(event) => setApiKeys({ pexels: event.target.value })}
+                    placeholder="Required for automatic stock footage"
+                    className="mt-1.5 w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60"
+                  />
+                  <span className="mt-1.5 block text-[9px] text-slate-600">
+                    Pexels and its contributors are credited in the scene inspector.
+                  </span>
+                </label>
+              )}
+            </div>
+
             <button
               onClick={createProject}
-              disabled={!selectedAudio || !apiKeys.gemini.trim()}
+              disabled={
+                !selectedAudio ||
+                !apiKeys.gemini.trim() ||
+                (autoStockEnabled && !apiKeys.pexels.trim())
+              }
               className="mt-6 w-full rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed py-3.5 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
             >
               <Sparkles className="h-4 w-4" />

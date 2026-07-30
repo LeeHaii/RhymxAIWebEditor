@@ -3,7 +3,15 @@ import { AlertTriangle, AudioLines, Check, LoaderCircle } from 'lucide-react'
 import { useEditorStore } from '../../store/useEditorStore'
 
 export default function TranscribingScreen() {
-  const { projectName, audioFile, processingError, setScreen, setProcessingError } = useEditorStore()
+  const {
+    projectName,
+    audioFile,
+    processingError,
+    processingStage,
+    processingProgress,
+    setScreen,
+    setProcessingError,
+  } = useEditorStore()
   const fileName = audioFile?.path.split(/[\\/]/).pop()
 
   if (processingError) {
@@ -50,12 +58,58 @@ export default function TranscribingScreen() {
             Voiceover uploaded
           </div>
           <div className="flex items-center gap-3 text-sm text-white">
-            <LoaderCircle className="h-4 w-4 text-violet-400 animate-spin" />
+            {processingStage === 'transcribing' ? (
+              <LoaderCircle className="h-4 w-4 text-violet-400 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4 text-emerald-400" />
+            )}
             Transcribing speech and detecting scenes
           </div>
-          <div className="flex items-center gap-3 text-sm text-slate-600">
-            <div className="h-4 w-4 rounded-full border border-slate-700" />
-            Creating synchronized subtitles
+          <div
+            className={`flex items-center gap-3 text-sm ${
+              processingStage === 'transcribing' ? 'text-slate-600' : 'text-white'
+            }`}
+          >
+            {processingStage === 'matching-stock' ? (
+              <LoaderCircle className="h-4 w-4 text-violet-400 animate-spin" />
+            ) : processingStage === 'saving' ? (
+              <Check className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <div className="h-4 w-4 rounded-full border border-slate-700" />
+            )}
+            <span className="flex-1">
+              Matching scenes with Pexels stock footage
+              {processingStage === 'matching-stock' && processingProgress.total > 0 && (
+                <span className="block text-[10px] text-slate-500 mt-0.5">
+                  {processingProgress.completed}/{processingProgress.total} searched ·{' '}
+                  {processingProgress.matched} matched
+                </span>
+              )}
+            </span>
+          </div>
+          {processingStage === 'matching-stock' && processingProgress.total > 0 && (
+            <div className="h-1.5 rounded-full bg-black/30 overflow-hidden">
+              <div
+                className="h-full bg-violet-500 transition-[width]"
+                style={{
+                  width: `${
+                    (processingProgress.completed / processingProgress.total) * 100
+                  }%`,
+                }}
+              />
+            </div>
+          )}
+          <div
+            className={`flex items-center gap-3 text-sm ${
+              processingStage === 'saving' ? 'text-white' : 'text-slate-600'
+            }`}
+          >
+            {processingStage === 'saving' ? (
+              <LoaderCircle className="h-4 w-4 text-violet-400 animate-spin" />
+            ) : (
+              <div className="h-4 w-4 rounded-full border border-slate-700" />
+            )}
+            Creating synchronized subtitles and saving project
           </div>
         </div>
         <p className="text-xs text-slate-600 mt-5">Keep this window open while Gemini processes the audio.</p>

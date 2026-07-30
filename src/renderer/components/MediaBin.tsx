@@ -2,6 +2,7 @@ import React, { DragEvent, useState } from 'react'
 import { FileAudio, Film, Image as ImageIcon, Music2, Plus, Trash2, Upload } from 'lucide-react'
 import { ImportedFile, LibraryAsset, MediaKind } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
+import { localMediaUrl } from '../services/localMedia'
 
 type FileWithPath = File & { path?: string }
 type MediaFilter = 'all' | 'video' | 'image' | 'audio'
@@ -14,11 +15,6 @@ function classify(name: string): MediaKind {
   if (videoExtensions.has(extension)) return 'video'
   if (imageExtensions.has(extension)) return 'image'
   return 'music'
-}
-
-function fileUrl(filePath: string) {
-  if (/^https?:\/\//.test(filePath) || filePath.startsWith('file:')) return filePath
-  return encodeURI(`file:///${filePath.replace(/\\/g, '/')}`)
 }
 
 export default function MediaBin({ width = 256 }: { width?: number }) {
@@ -173,9 +169,17 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
                   }
                 >
                   {asset.kind === 'image' ? (
-                    <img src={fileUrl(asset.path)} className="w-full h-full object-cover" alt="" />
+                    <img
+                      src={localMediaUrl(asset.path)}
+                      className="w-full h-full object-cover"
+                      alt=""
+                    />
                   ) : asset.kind === 'video' ? (
-                    <video src={fileUrl(asset.path)} className="w-full h-full object-cover" muted />
+                    <video
+                      src={localMediaUrl(asset.path)}
+                      className="w-full h-full object-cover"
+                      muted
+                    />
                   ) : asset.kind === 'sfx' ? (
                     <FileAudio className="h-6 w-6 text-amber-400" />
                   ) : (

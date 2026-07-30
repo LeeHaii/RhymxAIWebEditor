@@ -15,6 +15,8 @@ const clamp = (value: number, minimum: number, maximum: number) =>
 function EditorWorkspace() {
   const projectUpdatedAt = useEditorStore((state) => state.projectUpdatedAt)
   const projectId = useEditorStore((state) => state.projectId)
+  const editorNotice = useEditorStore((state) => state.editorNotice)
+  const setEditorNotice = useEditorStore((state) => state.setEditorNotice)
   const [mediaWidth, setMediaWidth] = useState(() =>
     Number(localStorage.getItem('rhymx.mediaWidth') || 256)
   )
@@ -131,6 +133,17 @@ function EditorWorkspace() {
   return (
     <div className="flex flex-col h-screen bg-[#0b0d12] text-slate-50 overflow-hidden">
       <Header />
+      {editorNotice && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[180] w-[min(680px,calc(100%-32px))] rounded-xl border border-violet-500/25 bg-[#1a1824]/95 shadow-2xl px-4 py-3 flex items-start gap-3 text-[11px] text-violet-100">
+          <span className="flex-1">{editorNotice}</span>
+          <button
+            onClick={() => setEditorNotice(null)}
+            className="text-violet-300/60 hover:text-white"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="flex flex-1 overflow-hidden">
         <MediaBin width={mediaWidth} />
         <div

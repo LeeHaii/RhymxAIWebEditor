@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react'
-import { Clock3, Film, FolderOpen, Plus, Sparkles } from 'lucide-react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { Clock3, Film, FolderOpen, Layers3, Plus, Settings, Sparkles } from 'lucide-react'
 import { ProjectSummary } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
+import BatchExportDialog from './BatchExportDialog'
+import ProjectSettingsDialog from './ProjectSettingsDialog'
 
 export default function ProjectHome() {
   const { setScreen, loadProject } = useEditorStore()
@@ -9,14 +11,22 @@ export default function ProjectHome() {
   const [isLoading, setIsLoading] = useState(true)
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showBatchExport, setShowBatchExport] = useState(false)
 
-  useEffect(() => {
+  const refreshProjects = useCallback(() => {
+    setIsLoading(true)
+    setError(null)
     window.electronAPI
       .listProjects()
       .then(setProjects)
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setIsLoading(false))
   }, [])
+
+  useEffect(() => {
+    refreshProjects()
+  }, [refreshProjects])
 
   const openProject = async (projectId: string) => {
     setOpeningId(projectId)
@@ -32,7 +42,7 @@ export default function ProjectHome() {
 
   return (
     <div className="min-h-screen bg-[#0b0d12] text-white">
-      <header className="h-20 border-b border-white/5 bg-[#101218]/90 flex items-center px-10">
+      <header className="h-20 border-b border-white/5 bg-[#101218]/90 flex items-center justify-between px-10">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-950/40">
             <Film className="h-5 w-5" />
@@ -41,6 +51,23 @@ export default function ProjectHome() {
             <div className="font-semibold tracking-tight">Rhymx Studio</div>
             <div className="text-[11px] text-slate-500">AI video editor</div>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowBatchExport(true)}
+            disabled={projects.length === 0}
+            className="h-9 px-3 rounded-lg border border-white/8 bg-white/5 hover:bg-white/10 disabled:opacity-35 flex items-center gap-2 text-xs text-slate-300"
+          >
+            <Layers3 className="h-3.5 w-3.5" />
+            Batch render
+          </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="h-9 px-3 rounded-lg border border-white/8 bg-white/5 hover:bg-white/10 flex items-center gap-2 text-xs text-slate-300"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Settings
+          </button>
         </div>
       </header>
 
@@ -123,6 +150,18 @@ export default function ProjectHome() {
           )}
         </section>
       </main>
+      {showSettings && (
+        <ProjectSettingsDialog
+          onClose={() => setShowSettings(false)}
+          onStorageChanged={refreshProjects}
+        />
+      )}
+      {showBatchExport && (
+        <BatchExportDialog
+          projects={projects}
+          onClose={() => setShowBatchExport(false)}
+        />
+      )}
     </div>
   )
 }

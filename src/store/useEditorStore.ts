@@ -33,6 +33,82 @@ const defaultVideoTracks = (): VideoTrack[] => [
   { id: 'track_main', name: 'Main video', muted: false, visible: true },
 ]
 
+const COLLISION_EPSILON = 1 / 300
+
+type ClipInterval = {
+  id: string
+  start: number
+  end: number
+}
+
+function overlaps(start: number, duration: number, interval: ClipInterval) {
+  const end = start + duration
+  return (
+    start < interval.end - COLLISION_EPSILON &&
+    end > interval.start + COLLISION_EPSILON
+  )
+}
+
+function nearestAvailableStart(
+  requestedStart: number,
+  duration: number,
+  intervals: ClipInterval[]
+) {
+  const requested = Math.max(0, requestedStart)
+  if (!intervals.some((interval) => overlaps(requested, duration, interval))) {
+    return requested
+  }
+  const candidates = Array.from(
+    new Set([
+      0,
+      ...intervals.flatMap((interval) => [
+        interval.end,
+        Math.max(0, interval.start - duration),
+      ]),
+    ])
+  )
+    .filter(
+      (candidate) =>
+        !intervals.some((interval) => overlaps(candidate, duration, interval))
+    )
+    .sort(
+      (first, second) =>
+        Math.abs(first - requested) - Math.abs(second - requested) ||
+        first - second
+    )
+  return candidates[0] ?? Math.max(0, ...intervals.map((interval) => interval.end))
+}
+
+function resolveSceneOverlaps(scenes: SceneSegment[]) {
+  const output = scenes.map((scene) => ({ ...scene }))
+  const trackIds = new Set(output.map((scene) => scene.trackId))
+  for (const trackId of trackIds) {
+    let cursor = 0
+    output
+      .filter((scene) => scene.trackId === trackId)
+      .sort((first, second) => first.startTimeSec - second.startTimeSec)
+      .forEach((scene) => {
+        const startTimeSec = Math.max(cursor, scene.startTimeSec)
+        scene.startTimeSec = startTimeSec
+        scene.endTimeSec = startTimeSec + scene.durationSec
+        cursor = scene.endTimeSec
+      })
+  }
+  return output
+}
+
+function resolveAudioOverlaps(clips: TimelineAudioClip[]) {
+  let cursor = 0
+  return clips
+    .map((clip) => ({ ...clip }))
+    .sort((first, second) => first.startTimeSec - second.startTimeSec)
+    .map((clip) => {
+      const startTimeSec = Math.max(cursor, clip.startTimeSec)
+      cursor = startTimeSec + clip.durationSec
+      return { ...clip, startTimeSec }
+    })
+}
+
 const normalizeVideoTracks = (tracks?: VideoTrack[]): VideoTrack[] =>
   (tracks?.length ? tracks : defaultVideoTracks()).map((track) => ({
     ...track,
@@ -46,7 +122,7 @@ const normalizeSubtitleSettings = (settings?: SubtitleSettings): SubtitleSetting
 })
 
 const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): SceneSegment[] =>
-  scenes.map((scene) => {
+  resolveSceneOverlaps(scenes.map((scene) => {
     const media = scene.media
       ? {
           ...scene.media,
@@ -73,10 +149,10 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
       scale: scene.scale ?? 1,
       opacity: scene.opacity ?? 1,
     }
-  })
+  }))
 
 const normalizeAudioClips = (clips?: TimelineAudioClip[]): TimelineAudioClip[] =>
-  (clips || []).map((clip) => {
+  resolveAudioOverlaps((clips || []).map((clip) => {
     const sourceStartSec = clip.sourceStartSec ?? 0
     return {
       ...clip,
@@ -88,7 +164,7 @@ const normalizeAudioClips = (clips?: TimelineAudioClip[]): TimelineAudioClip[] =
           )
         : clip.durationSec,
     }
-  })
+  }))
 
 interface HistorySnapshot {
   audioFile: { path: string; duration: number } | null
@@ -129,6 +205,9 @@ interface EditorStore {
   }
   isProcessingAudio: boolean
   processingError: string | null
+  processingStage: 'transcribing' | 'matching-stock' | 'saving'
+  processingProgress: { completed: number; total: number; matched: number }
+  editorNotice: string | null
   exportProgress: number | null
   seekTargetSec: number
   seekVersion: number
@@ -176,6 +255,15 @@ interface EditorStore {
   }) => void
   setIsProcessingAudio: (processing: boolean) => void
   setProcessingError: (error: string | null) => void
+  setProcessingStage: (
+    stage: 'transcribing' | 'matching-stock' | 'saving'
+  ) => void
+  setProcessingProgress: (progress: {
+    completed: number
+    total: number
+    matched: number
+  }) => void
+  setEditorNotice: (notice: string | null) => void
   setExportProgress: (progress: number | null) => void
   addMediaAssets: (assets: LibraryAsset[]) => void
   removeMediaAsset: (id: string) => void
@@ -264,6 +352,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
   },
   isProcessingAudio: false,
   processingError: null,
+  processingStage: 'transcribing',
+  processingProgress: { completed: 0, total: 0, matched: 0 },
+  editorNotice: null,
   exportProgress: null,
   seekTargetSec: 0,
   seekVersion: 0,
@@ -296,6 +387,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
       currentTimeSec: 0,
       isProcessingAudio: true,
       processingError: null,
+      processingStage: 'transcribing',
+      processingProgress: { completed: 0, total: 0, matched: 0 },
+      editorNotice: null,
       history: [],
       future: [],
     })
@@ -331,6 +425,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       currentTimeSec: 0,
       isPlaying: false,
       processingError: null,
+      editorNotice: null,
       history: [],
       future: [],
     })
@@ -356,6 +451,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
       currentTimeSec: 0,
       isPlaying: false,
       processingError: null,
+      processingStage: 'transcribing',
+      processingProgress: { completed: 0, total: 0, matched: 0 },
+      editorNotice: null,
       history: [],
       future: [],
     }),
@@ -383,11 +481,68 @@ export const useEditorStore = create<EditorStore>((set) => ({
       })
     }),
   updateScene: (id, updates) =>
-    set((state) =>
-      historyChange(state, {
-        scenes: state.scenes.map((scene) => (scene.id === id ? { ...scene, ...updates } : scene)),
+    set((state) => {
+      const current = state.scenes.find((scene) => scene.id === id)
+      if (!current) return state
+      let updated = { ...current, ...updates }
+      const timingChanged =
+        updates.startTimeSec !== undefined ||
+        updates.durationSec !== undefined ||
+        updates.endTimeSec !== undefined ||
+        updates.trackId !== undefined
+      if (timingChanged) {
+        const durationSec = Math.max(
+          1 / 30,
+          updates.durationSec ??
+            (updates.endTimeSec !== undefined
+              ? updates.endTimeSec - (updates.startTimeSec ?? current.startTimeSec)
+              : current.durationSec)
+        )
+        const trackId = updates.trackId ?? current.trackId
+        const intervals = state.scenes
+          .filter((scene) => scene.id !== id && scene.trackId === trackId)
+          .map((scene) => ({
+            id: scene.id,
+            start: scene.startTimeSec,
+            end: scene.endTimeSec,
+          }))
+        let startTimeSec = updates.startTimeSec ?? current.startTimeSec
+        if (
+          updates.startTimeSec !== undefined ||
+          updates.trackId !== undefined
+        ) {
+          startTimeSec = nearestAvailableStart(
+            startTimeSec,
+            durationSec,
+            intervals
+          )
+        } else if (updates.durationSec !== undefined) {
+          const nextStart = Math.min(
+            Number.POSITIVE_INFINITY,
+            ...intervals
+              .filter(
+                (interval) =>
+                  interval.start >= current.endTimeSec - COLLISION_EPSILON
+              )
+              .map((interval) => interval.start)
+          )
+          updated.durationSec = Math.min(
+            durationSec,
+            nextStart - current.startTimeSec
+          )
+        }
+        updated = {
+          ...updated,
+          trackId,
+          startTimeSec,
+          durationSec: updated.durationSec ?? durationSec,
+          endTimeSec: startTimeSec + (updated.durationSec ?? durationSec),
+        }
+      }
+      return historyChange(state, {
+        scenes: state.scenes.map((scene) => (scene.id === id ? updated : scene)),
       })
-    ),
+    }),
   splitScene: (id, atTimeSec) =>
     set((state) => {
       const index = state.scenes.findIndex((scene) => scene.id === id)
@@ -433,20 +588,59 @@ export const useEditorStore = create<EditorStore>((set) => ({
     }),
   trimScene: (id, startTimeSec, endTimeSec, sourceStartSec) =>
     set((state) => ({
-      scenes: state.scenes.map((scene) =>
-        scene.id === id
-          ? {
-              ...scene,
-              startTimeSec,
-              endTimeSec,
-              durationSec: Math.max(0.2, endTimeSec - startTimeSec),
-              media:
-                scene.media && sourceStartSec !== undefined
-                  ? { ...scene.media, sourceStartSec }
-                  : scene.media,
-            }
-          : scene
-      ),
+      scenes: state.scenes.map((scene) => {
+        if (scene.id !== id) return scene
+        const neighbors = state.scenes.filter(
+          (candidate) =>
+            candidate.id !== id && candidate.trackId === scene.trackId
+        )
+        const previousEnd = Math.max(
+          0,
+          ...neighbors
+            .filter(
+              (candidate) =>
+                candidate.endTimeSec <=
+                scene.startTimeSec + COLLISION_EPSILON
+            )
+            .map((candidate) => candidate.endTimeSec)
+        )
+        const nextStart = Math.min(
+          Number.POSITIVE_INFINITY,
+          ...neighbors
+            .filter(
+              (candidate) =>
+                candidate.startTimeSec >=
+                scene.endTimeSec - COLLISION_EPSILON
+            )
+            .map((candidate) => candidate.startTimeSec)
+        )
+        const boundedStart = Math.max(
+          previousEnd,
+          Math.min(endTimeSec - 1 / 30, startTimeSec)
+        )
+        const boundedEnd = Math.min(
+          nextStart,
+          Math.max(boundedStart + 1 / 30, endTimeSec)
+        )
+        return {
+          ...scene,
+          startTimeSec: boundedStart,
+          endTimeSec: boundedEnd,
+          durationSec: boundedEnd - boundedStart,
+          media:
+            scene.media && sourceStartSec !== undefined
+              ? {
+                  ...scene.media,
+                  sourceStartSec: Math.max(
+                    0,
+                    (scene.media.sourceStartSec ?? 0) +
+                      boundedStart -
+                      scene.startTimeSec
+                  ),
+                }
+              : scene.media,
+        }
+      }),
       projectUpdatedAt: markUpdated(),
     })),
   deleteScene: (id) =>
@@ -476,8 +670,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
       if (!mainTrack || id === mainTrack.id) return state
       return historyChange(state, {
         videoTracks: state.videoTracks.filter((track) => track.id !== id),
-        scenes: state.scenes.map((scene) =>
-          scene.trackId === id ? { ...scene, trackId: mainTrack.id } : scene
+        scenes: resolveSceneOverlaps(
+          state.scenes.map((scene) =>
+            scene.trackId === id ? { ...scene, trackId: mainTrack.id } : scene
+          )
         ),
       })
     }),
@@ -509,7 +705,17 @@ export const useEditorStore = create<EditorStore>((set) => ({
         asset.kind === 'video'
           ? Math.max(0.2, Math.min(5, asset.durationSec || 5))
           : 5
-      const start = Math.max(0, startTimeSec)
+      const start = nearestAvailableStart(
+        startTimeSec,
+        durationSec,
+        state.scenes
+          .filter((scene) => scene.trackId === trackId)
+          .map((scene) => ({
+            id: scene.id,
+            start: scene.startTimeSec,
+            end: scene.endTimeSec,
+          }))
+      )
       const scene: SceneSegment = {
         id,
         startTimeSec: start,
@@ -544,12 +750,28 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set((state) => ({
       scenes: state.scenes.map((scene) =>
         scene.id === id
-          ? {
-              ...scene,
-              trackId,
-              startTimeSec: Math.max(0, startTimeSec),
-              endTimeSec: Math.max(0, startTimeSec) + scene.durationSec,
-            }
+          ? (() => {
+              const availableStart = nearestAvailableStart(
+                startTimeSec,
+                scene.durationSec,
+                state.scenes
+                  .filter(
+                    (candidate) =>
+                      candidate.id !== id && candidate.trackId === trackId
+                  )
+                  .map((candidate) => ({
+                    id: candidate.id,
+                    start: candidate.startTimeSec,
+                    end: candidate.endTimeSec,
+                  }))
+              )
+              return {
+                ...scene,
+                trackId,
+                startTimeSec: availableStart,
+                endTimeSec: availableStart + scene.durationSec,
+              }
+            })()
           : scene
       ),
       projectUpdatedAt: markUpdated(),
@@ -628,6 +850,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
   setApiKeys: (keys) => set((state) => ({ apiKeys: { ...state.apiKeys, ...keys } })),
   setIsProcessingAudio: (isProcessingAudio) => set({ isProcessingAudio }),
   setProcessingError: (processingError) => set({ processingError }),
+  setProcessingStage: (processingStage) => set({ processingStage }),
+  setProcessingProgress: (processingProgress) => set({ processingProgress }),
+  setEditorNotice: (editorNotice) => set({ editorNotice }),
   setExportProgress: (exportProgress) => set({ exportProgress }),
   addMediaAssets: (assets) =>
     set((state) => {
@@ -677,6 +902,20 @@ export const useEditorStore = create<EditorStore>((set) => ({
   addAudioClip: (asset, startTimeSec) =>
     set((state) => {
       const id = crypto.randomUUID()
+      const durationSec = asset.durationSec || 10
+      const requestedStart = Math.max(
+        0,
+        startTimeSec ?? state.currentTimeSec
+      )
+      const availableStart = nearestAvailableStart(
+        requestedStart,
+        durationSec,
+        state.audioClips.map((clip) => ({
+          id: clip.id,
+          start: clip.startTimeSec,
+          end: clip.startTimeSec + clip.durationSec,
+        }))
+      )
       return historyChange(state, {
         audioClips: [
           ...state.audioClips,
@@ -685,8 +924,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
             name: asset.name,
             path: asset.path,
             kind: asset.kind === 'sfx' ? 'sfx' : 'music',
-            startTimeSec: Math.max(0, startTimeSec ?? state.currentTimeSec),
-            durationSec: asset.durationSec || 10,
+            startTimeSec: availableStart,
+            durationSec,
             sourceStartSec: 0,
             sourceDurationSec: asset.durationSec,
             volume: asset.kind === 'sfx' ? 1 : 0.35,
@@ -706,7 +945,22 @@ export const useEditorStore = create<EditorStore>((set) => ({
   moveAudioClip: (id, startTimeSec) =>
     set((state) => ({
       audioClips: state.audioClips.map((clip) =>
-        clip.id === id ? { ...clip, startTimeSec: Math.max(0, startTimeSec) } : clip
+        clip.id === id
+          ? {
+              ...clip,
+              startTimeSec: nearestAvailableStart(
+                startTimeSec,
+                clip.durationSec,
+                state.audioClips
+                  .filter((candidate) => candidate.id !== id)
+                  .map((candidate) => ({
+                    id: candidate.id,
+                    start: candidate.startTimeSec,
+                    end: candidate.startTimeSec + candidate.durationSec,
+                  }))
+              ),
+            }
+          : clip
       ),
       projectUpdatedAt: markUpdated(),
     })),
@@ -721,31 +975,101 @@ export const useEditorStore = create<EditorStore>((set) => ({
                 const maximumDuration = merged.sourceDurationSec
                   ? Math.max(0.05, merged.sourceDurationSec - sourceStartSec)
                   : Number.POSITIVE_INFINITY
+                let durationSec = Math.max(
+                  0.05,
+                  Math.min(merged.durationSec, maximumDuration)
+                )
+                const intervals = state.audioClips
+                  .filter((candidate) => candidate.id !== id)
+                  .map((candidate) => ({
+                    id: candidate.id,
+                    start: candidate.startTimeSec,
+                    end: candidate.startTimeSec + candidate.durationSec,
+                  }))
+                let startTimeSec = merged.startTimeSec
+                if (updates.startTimeSec !== undefined) {
+                  startTimeSec = nearestAvailableStart(
+                    startTimeSec,
+                    durationSec,
+                    intervals
+                  )
+                } else if (updates.durationSec !== undefined) {
+                  const nextStart = Math.min(
+                    Number.POSITIVE_INFINITY,
+                    ...intervals
+                      .filter(
+                        (interval) =>
+                          interval.start >=
+                          clip.startTimeSec +
+                            clip.durationSec -
+                            COLLISION_EPSILON
+                      )
+                      .map((interval) => interval.start)
+                  )
+                  durationSec = Math.min(
+                    durationSec,
+                    nextStart - clip.startTimeSec
+                  )
+                }
                 return {
                   ...merged,
                   sourceStartSec,
-                  durationSec: Math.max(
-                    0.05,
-                    Math.min(merged.durationSec, maximumDuration)
-                  ),
+                  startTimeSec,
+                  durationSec,
                 }
               })()
             : clip
         ),
       })
     ),
-  trimAudioClip: (id, startTimeSec, durationSec, sourceStartSec) =>
+  trimAudioClip: (id, startTimeSec, durationSec, _sourceStartSec) =>
     set((state) => ({
-      audioClips: state.audioClips.map((clip) =>
-        clip.id === id
-          ? {
-              ...clip,
-              startTimeSec: Math.max(0, startTimeSec),
-              durationSec: Math.max(0.05, durationSec),
-              sourceStartSec: Math.max(0, sourceStartSec),
-            }
-          : clip
-      ),
+      audioClips: state.audioClips.map((clip) => {
+        if (clip.id !== id) return clip
+        const neighbors = state.audioClips.filter(
+          (candidate) => candidate.id !== id
+        )
+        const originalEnd = clip.startTimeSec + clip.durationSec
+        const requestedEnd = startTimeSec + durationSec
+        const previousEnd = Math.max(
+          0,
+          ...neighbors
+            .filter(
+              (candidate) =>
+                candidate.startTimeSec + candidate.durationSec <=
+                clip.startTimeSec + COLLISION_EPSILON
+            )
+            .map(
+              (candidate) => candidate.startTimeSec + candidate.durationSec
+            )
+        )
+        const nextStart = Math.min(
+          Number.POSITIVE_INFINITY,
+          ...neighbors
+            .filter(
+              (candidate) =>
+                candidate.startTimeSec >= originalEnd - COLLISION_EPSILON
+            )
+            .map((candidate) => candidate.startTimeSec)
+        )
+        const boundedStart = Math.max(
+          previousEnd,
+          Math.min(requestedEnd - 1 / 30, startTimeSec)
+        )
+        const boundedEnd = Math.min(
+          nextStart,
+          Math.max(boundedStart + 1 / 30, requestedEnd)
+        )
+        return {
+          ...clip,
+          startTimeSec: boundedStart,
+          durationSec: boundedEnd - boundedStart,
+          sourceStartSec: Math.max(
+            0,
+            (clip.sourceStartSec ?? 0) + boundedStart - clip.startTimeSec
+          ),
+        }
+      }),
       projectUpdatedAt: markUpdated(),
     })),
   updateSubtitleSettings: (updates) =>

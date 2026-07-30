@@ -4,13 +4,33 @@ import {
   renderMedia,
   selectComposition,
 } from '@remotion/renderer'
-import { createReadStream, promises as fs } from 'node:fs'
+import { createReadStream, existsSync, promises as fs } from 'node:fs'
 import { createServer, Server } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { app } from 'electron'
 import { ExportVideoRequest } from '../../types/editor'
 
 let cancelCurrentRender: (() => void) | null = null
+let developmentBundle: Promise<string> | null = null
+
+async function getBundledComposition() {
+  const applicationPath = app
+    .getAppPath()
+    .replace(`${path.sep}app.asar`, `${path.sep}app.asar.unpacked`)
+  const staticBundle = path.join(applicationPath, 'dist-remotion')
+  if (existsSync(path.join(staticBundle, 'index.html'))) return staticBundle
+  if (!developmentBundle) {
+    developmentBundle = bundle({
+      entryPoint: path.join(app.getAppPath(), 'src', 'remotion', 'index.ts'),
+      webpackOverride: (config) => config,
+    }).catch((error) => {
+      developmentBundle = null
+      throw error
+    })
+  }
+  return await developmentBundle
+}
 
 export function cancelActiveExport() {
   if (!cancelCurrentRender) return false
@@ -54,11 +74,7 @@ export async function exportVideo(
       audioTrackSettings: request.audioTrackSettings,
     }
 
-    const compositionEntry = path.join(process.cwd(), 'src', 'remotion', 'index.ts')
-    const bundled = await bundle({
-      entryPoint: compositionEntry,
-      webpackOverride: (config) => config,
-    })
+    const bundled = await getBundledComposition()
 
     const selectedComposition = await selectComposition({
       serveUrl: bundled,

@@ -18,6 +18,9 @@ export interface MediaAsset {
   durationSec?: number
   sourceStartSec?: number
   sourceDurationSec?: number
+  providerUrl?: string
+  creatorName?: string
+  creatorUrl?: string
   imageFit?: 'cover' | 'contain'
   enableKenBurnsEffect?: boolean
 }
@@ -115,6 +118,28 @@ export interface ProjectSummary {
   sceneCount: number
 }
 
+export interface AppSettings {
+  projectsDirectory: string
+  defaultProjectsDirectory: string
+  autoStockEnabled: boolean
+  cacheSizeBytes: number
+}
+
+export interface PexelsAutoMatchProgress {
+  completed: number
+  total: number
+  matched: number
+  sceneId?: string
+  query?: string
+}
+
+export interface PexelsAutoMatchResult {
+  scenes: SceneSegment[]
+  matchedCount: number
+  unmatchedCount: number
+  warnings: string[]
+}
+
 export interface ImportedFile {
   path: string
   name: string
@@ -163,14 +188,51 @@ export interface ExportVideoRequest {
   encoder: ExportEncoder
 }
 
+export interface BatchExportRequest {
+  projectIds: string[]
+  outputDirectory: string
+  width: number
+  height: number
+  videoBitrate: string
+  encoder: ExportEncoder
+}
+
+export interface BatchExportProgress {
+  projectId: string
+  projectName: string
+  projectIndex: number
+  totalProjects: number
+  projectProgress: number
+  status: 'preparing' | 'rendering' | 'completed' | 'failed' | 'cancelled'
+  message?: string
+}
+
+export interface BatchExportResult {
+  completed: Array<{ projectId: string; outputPath: string }>
+  failed: Array<{ projectId: string; error: string }>
+  cancelled: boolean
+}
+
 export interface ElectronAPI {
   openAudioFile: () => Promise<{ path: string; duration: number } | null>
   openMediaFiles: () => Promise<ImportedFile[]>
   getMediaDuration: (filePath: string) => Promise<number | null>
   transcribeAudio: (filePath: string, apiKey: string) => Promise<SceneSegment[]>
+  autoMatchPexelsVideos: (
+    scenes: SceneSegment[],
+    apiKey: string
+  ) => Promise<PexelsAutoMatchResult>
+  onPexelsAutoMatchProgress: (
+    callback: (progress: PexelsAutoMatchProgress) => void
+  ) => void
   listProjects: () => Promise<ProjectSummary[]>
   loadProject: (projectId: string) => Promise<ProjectDocument>
   saveProject: (project: ProjectDocument) => Promise<void>
+  getAppSettings: () => Promise<AppSettings>
+  chooseProjectsDirectory: () => Promise<AppSettings | null>
+  resetProjectsDirectory: () => Promise<AppSettings>
+  setAutoStockEnabled: (enabled: boolean) => Promise<AppSettings>
+  clearCache: () => Promise<AppSettings>
   trimYouTube: (url: string, startTime: number, endTime: number) => Promise<string>
   searchImages: (query: string, pexelsKey?: string) => Promise<ImageSearchResult[]>
   searchDuckDuckGoImages: (query: string) => Promise<ImageSearchResult[]>
@@ -180,6 +242,12 @@ export interface ElectronAPI {
   exportVideo: (request: ExportVideoRequest) => Promise<string>
   cancelExport: () => Promise<boolean>
   onExportProgress: (callback: (progress: number) => void) => void
+  chooseBatchExportDirectory: () => Promise<string | null>
+  batchExportProjects: (request: BatchExportRequest) => Promise<BatchExportResult>
+  cancelBatchExport: () => Promise<boolean>
+  onBatchExportProgress: (
+    callback: (progress: BatchExportProgress) => void
+  ) => void
   getPexelsKey: () => Promise<string | null>
   setPexelsKey: (key: string) => Promise<void>
   getGeminiKey: () => Promise<string | null>

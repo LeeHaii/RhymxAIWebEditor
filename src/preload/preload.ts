@@ -5,9 +5,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openMediaFiles: () => ipcRenderer.invoke('open-media-files'),
   getMediaDuration: (filePath: string) => ipcRenderer.invoke('get-media-duration', filePath),
   transcribeAudio: (filePath: string, apiKey: string) => ipcRenderer.invoke('transcribe-audio', filePath, apiKey),
+  autoMatchPexelsVideos: (scenes: any[], apiKey: string) =>
+    ipcRenderer.invoke('auto-match-pexels-videos', scenes, apiKey),
+  onPexelsAutoMatchProgress: (callback: (progress: any) => void) => {
+    ipcRenderer.removeAllListeners('pexels-auto-match-progress')
+    ipcRenderer.on('pexels-auto-match-progress', (_event, value) => callback(value))
+  },
   listProjects: () => ipcRenderer.invoke('list-projects'),
   loadProject: (projectId: string) => ipcRenderer.invoke('load-project', projectId),
   saveProject: (project: any) => ipcRenderer.invoke('save-project', project),
+  getAppSettings: () => ipcRenderer.invoke('get-app-settings'),
+  chooseProjectsDirectory: () => ipcRenderer.invoke('choose-projects-directory'),
+  resetProjectsDirectory: () => ipcRenderer.invoke('reset-projects-directory'),
+  setAutoStockEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke('set-auto-stock-enabled', enabled),
+  clearCache: () => ipcRenderer.invoke('clear-cache'),
   trimYouTube: (url: string, startTime: number, endTime: number) => ipcRenderer.invoke('trim-youtube', url, startTime, endTime),
   searchImages: (query: string, pexelsKey?: string) =>
     ipcRenderer.invoke('search-images', query, pexelsKey),
@@ -23,6 +35,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onExportProgress: (callback: (progress: number) => void) => {
     ipcRenderer.removeAllListeners('export-progress')
     ipcRenderer.on('export-progress', (_event, value) => callback(value))
+  },
+  chooseBatchExportDirectory: () =>
+    ipcRenderer.invoke('choose-batch-export-directory'),
+  batchExportProjects: (request: any) =>
+    ipcRenderer.invoke('batch-export-projects', request),
+  cancelBatchExport: () => ipcRenderer.invoke('cancel-batch-export'),
+  onBatchExportProgress: (callback: (progress: any) => void) => {
+    ipcRenderer.removeAllListeners('batch-export-progress')
+    ipcRenderer.on('batch-export-progress', (_event, value) => callback(value))
   },
   getPexelsKey: () => ipcRenderer.invoke('get-pexels-key'),
   setPexelsKey: (key: string) => ipcRenderer.invoke('set-pexels-key', key),

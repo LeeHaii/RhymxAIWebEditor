@@ -8,7 +8,8 @@
       "output": "release"
     },
     "asarUnpack": [
-      "node_modules/@remotion/compositor-win32-x64-msvc/**/*"
+      "node_modules/@remotion/compositor-win32-x64-msvc/**/*",
+      "dist-remotion/**/*"
     ],
     "win": {
       "signAndEditExecutable": false
@@ -16,7 +17,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "build": "tsc && vite build && remotion bundle src/remotion/index.ts --out-dir=dist-remotion && electron-builder",
     "preview": "vite preview"
   },
   "dependencies": {

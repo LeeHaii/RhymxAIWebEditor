@@ -76,7 +76,10 @@ export async function transcribeAudio(filePath: string, apiKey: string): Promise
       3. endTimeSec: float in seconds
       4. durationSec: float in seconds
       5. transcriptText: the spoken text in this scene
-      6. keywords: an array of 2-3 visual keywords describing the scene for stock footage search (e.g. ["airplane flying", "cloudy sky"]).
+      6. keywords: an array of 2-3 concise English stock-video search phrases.
+         Make them concrete, visual, and directly searchable, even when the voiceover is in another language.
+         Prefer subjects, actions, and locations over abstract concepts
+         (e.g. ["airplane flying", "cloudy sky"], not ["freedom", "success"]).
       
       Respond ONLY with valid JSON in this format:
       {

@@ -36,8 +36,14 @@ const defaultSubtitleSettings: SubtitleSettings = {
 const defaultTrackSettings: TrackSettings = { muted: false, visible: true }
 
 function mediaSource(source: string) {
-  if (!source || /^(https?:|data:|blob:|file:)/.test(source)) return source
-  return encodeURI(`file:///${source.replace(/\\/g, '/')}`)
+  if (!source || /^(https?:|data:|blob:|rhymx-media:)/.test(source)) return source
+  let filePath = source
+  if (source.startsWith('file:')) {
+    const parsed = new URL(source)
+    filePath = decodeURIComponent(parsed.pathname)
+    if (/^\/[a-zA-Z]:\//.test(filePath)) filePath = filePath.slice(1)
+  }
+  return `rhymx-media://local/${encodeURIComponent(filePath)}`
 }
 
 export const MainComposition: React.FC<{

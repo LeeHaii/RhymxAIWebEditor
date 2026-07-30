@@ -1,12 +1,17 @@
 import { execFile } from 'child_process'
 import path from 'path'
-import os from 'os'
+import { pathToFileURL } from 'node:url'
 import fs from 'fs/promises'
 
 // Helper to run yt-dlp
-export async function trimYouTube(url: string, startTime: number, endTime: number): Promise<string> {
-  const tempDir = os.tmpdir()
-  const outputPath = path.join(tempDir, `clip_${Date.now()}.mp4`)
+export async function trimYouTube(
+  url: string,
+  startTime: number,
+  endTime: number,
+  cacheDirectory: string
+): Promise<string> {
+  await fs.mkdir(cacheDirectory, { recursive: true })
+  const outputPath = path.join(cacheDirectory, `rhymx_clip_${Date.now()}.mp4`)
 
   // In production, you would resolve the path to the bundled executable in process.resourcesPath.
   // For development, we assume `yt-dlp` is in the system PATH.
@@ -26,8 +31,7 @@ export async function trimYouTube(url: string, startTime: number, endTime: numbe
         console.error('yt-dlp error:', error)
         reject(error)
       } else {
-        // Return as a local file URL
-        resolve(`file://${outputPath}`)
+        resolve(pathToFileURL(outputPath).toString())
       }
     })
   })
