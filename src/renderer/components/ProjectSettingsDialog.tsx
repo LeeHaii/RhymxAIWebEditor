@@ -55,7 +55,7 @@ export default function ProjectSettingsDialog({
   const clearCache = async () => {
     if (
       !window.confirm(
-        'Clear generated clips and browser cache? Projects remain, but cached YouTube clips may need to be added again.'
+        'Clear temporary downloads and browser cache? Projects and saved YouTube clips are kept.'
       )
     ) {
       return
@@ -173,7 +173,8 @@ export default function ProjectSettingsDialog({
           <section className="border-t border-white/8 pt-5">
             <h3 className="text-xs font-medium text-slate-200">Cache</h3>
             <p className="mt-1 text-[10px] text-slate-500">
-              Generated clips and browser cache · {formatBytes(settings?.cacheSizeBytes || 0)}.
+              Temporary downloads and browser cache · {formatBytes(settings?.cacheSizeBytes || 0)}.
+              Saved YouTube clips are stored with their projects and are not cleared.
               Cached YouTube clips may be referenced by projects.
             </p>
             <button

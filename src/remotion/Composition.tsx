@@ -93,6 +93,8 @@ export const MainComposition: React.FC<{
             key={clip.id}
             from={Math.round(clip.startTimeSec * fps)}
             durationInFrames={Math.max(1, Math.round(clip.durationSec * fps))}
+            premountFor={Math.round(fps / 2)}
+            postmountFor={Math.round(fps / 4)}
           >
             <Audio
               src={mediaSource(clip.path)}
@@ -111,8 +113,14 @@ export const MainComposition: React.FC<{
             key={scene.id}
             from={Math.round(scene.startTimeSec * fps)}
             durationInFrames={Math.max(1, Math.round(scene.durationSec * fps))}
+            premountFor={fps}
+            postmountFor={Math.round(fps / 2)}
           >
-            <SceneContent scene={scene} trackMuted={track?.muted || false} />
+            <SceneContent
+              key={`${scene.media?.sourceUrl || 'empty'}:${scene.media?.sourceStartSec || 0}`}
+              scene={scene}
+              trackMuted={track?.muted || false}
+            />
           </Sequence>
         )
       })}
@@ -168,13 +176,31 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = Rea
 
   return (
     <AbsoluteFill
+      data-rhymx-scene-id={scene.id}
       style={{
         opacity: scene.opacity ?? 1,
         transform: `scale(${scene.scale ?? 1})`,
         transformOrigin: 'center center',
       }}
     >
-      {!media ? (
+      {media?.missing ? (
+        <AbsoluteFill
+          style={{
+            background: 'radial-gradient(circle at 50% 35%, #301b22 0%, #090a0e 68%)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 48,
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ color: '#fca5a5', fontSize: 30, fontWeight: 650 }}>
+            YouTube clip file is missing
+          </div>
+          <div style={{ color: '#8f6670', fontSize: 18, marginTop: 12 }}>
+            Download this clip again from the YouTube search tab
+          </div>
+        </AbsoluteFill>
+      ) : !media ? (
         <AbsoluteFill
           style={{
             background: 'radial-gradient(circle at 50% 30%, #20243a 0%, #090a0e 62%)',

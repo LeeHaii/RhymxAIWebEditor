@@ -21,8 +21,11 @@ export interface MediaAsset {
   providerUrl?: string
   creatorName?: string
   creatorUrl?: string
+  providerStartSec?: number
   imageFit?: 'cover' | 'contain'
   enableKenBurnsEffect?: boolean
+  missing?: boolean
+  missingReason?: string
 }
 
 export interface LibraryAsset {
@@ -31,6 +34,12 @@ export interface LibraryAsset {
   path: string
   kind: MediaKind
   durationSec?: number
+  origin?: 'imported' | 'youtube'
+  thumbnailUrl?: string
+  providerUrl?: string
+  providerStartSec?: number
+  missing?: boolean
+  missingReason?: string
 }
 
 export interface TimelineAudioClip {
@@ -180,6 +189,8 @@ export type ExportEncoder = 'cpu' | 'nvenc'
 export interface EncoderCapabilities {
   cpu: true
   nvenc: boolean
+  nvencReason?: string
+  nvencEncoder?: 'h264_nvenc'
   amdGpuDetected: boolean
   gpuNames: string[]
 }
@@ -251,7 +262,12 @@ export interface ElectronAPI {
   resetProjectsDirectory: () => Promise<AppSettings>
   setAutoStockEnabled: (enabled: boolean) => Promise<AppSettings>
   clearCache: () => Promise<AppSettings>
-  trimYouTube: (url: string, startTime: number, endTime: number) => Promise<string>
+  trimYouTube: (
+    url: string,
+    startTime: number,
+    endTime: number,
+    projectId: string
+  ) => Promise<string>
   onYouTubeTrimProgress: (callback: (progress: number) => void) => void
   searchImages: (query: string, pexelsKey?: string) => Promise<ImageSearchResult[]>
   searchDuckDuckGoImages: (query: string) => Promise<ImageSearchResult[]>

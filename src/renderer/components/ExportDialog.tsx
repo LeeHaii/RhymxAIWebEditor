@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Cpu, FolderOpen, MonitorUp, X } from 'lucide-react'
 import { EncoderCapabilities, ExportEncoder } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
@@ -23,7 +24,21 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
     subtitleSettings,
     exportProgress,
     setExportProgress,
-  } = useEditorStore()
+  } = useEditorStore(
+    useShallow((state) => ({
+      projectName: state.projectName,
+      scenes: state.scenes,
+      videoTracks: state.videoTracks,
+      voiceTrackSettings: state.voiceTrackSettings,
+      audioTrackSettings: state.audioTrackSettings,
+      subtitles: state.subtitles,
+      audioFile: state.audioFile,
+      audioClips: state.audioClips,
+      subtitleSettings: state.subtitleSettings,
+      exportProgress: state.exportProgress,
+      setExportProgress: state.setExportProgress,
+    }))
+  )
   const [name, setName] = useState(projectName.trim() || 'AI Video')
   const [outputPath, setOutputPath] = useState('')
   const [resolutionIndex, setResolutionIndex] = useState(1)
@@ -57,7 +72,11 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
     if (!audioFile || !outputPath) return
     setIsExporting(true)
     setExportProgress(0)
-    setStatus('Preparing render…')
+    setStatus(
+      encoder === 'nvenc'
+        ? 'Preparing render with verified NVIDIA NVENC…'
+        : 'Preparing CPU render…'
+    )
     try {
       const renderedPath = await window.electronAPI.exportVideo({
         scenes,
@@ -202,10 +221,20 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
                 </div>
               )}
               {encoder === 'nvenc' && (
-                <div className="text-[9px] text-slate-600 mt-1">
-                  NVENC falls back to CPU automatically if the installed driver cannot use it.
+                <div className="text-[9px] text-emerald-400/80 mt-1">
+                  h264_nvenc passed a real encode test. Export will stop with an error
+                  instead of falling back to CPU encoding.
                 </div>
               )}
+              {capabilities && !capabilities.nvenc && capabilities.nvencReason && (
+                <div className="text-[9px] text-amber-400/80 mt-1 break-words">
+                  {capabilities.nvencReason}
+                </div>
+              )}
+              <div className="text-[9px] text-slate-600 mt-1">
+                Chromium still uses CPU to draw composition frames; NVENC accelerates the
+                H.264 encoding stage.
+              </div>
             </div>
           </div>
 

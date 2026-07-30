@@ -10,6 +10,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
 import { ExportVideoRequest } from '../../types/editor'
+import { getEncoderCapabilities } from './hardware'
+import { getRemotionBinariesDirectory } from './remotionBinaries'
 
 let cancelCurrentRender: (() => void) | null = null
 let developmentBundle: Promise<string> | null = null
@@ -45,6 +47,14 @@ export async function exportVideo(
   if (cancelCurrentRender) {
     throw new Error('Another export is already running.')
   }
+  const missingYouTubeScene = request.scenes.find(
+    (scene) => scene.media?.type === 'youtube_clip' && scene.media.missing
+  )
+  if (missingYouTubeScene) {
+    throw new Error(
+      `YouTube clip "${missingYouTubeScene.media?.title || missingYouTubeScene.id}" is missing. Download it again before exporting.`
+    )
+  }
 
   const { cancel, cancelSignal } = makeCancelSignal()
   cancelCurrentRender = cancel
@@ -75,11 +85,22 @@ export async function exportVideo(
     }
 
     const bundled = await getBundledComposition()
+    const binariesDirectory = getRemotionBinariesDirectory()
+    if (request.encoder === 'nvenc') {
+      const capabilities = getEncoderCapabilities()
+      if (!capabilities.nvenc) {
+        throw new Error(
+          capabilities.nvencReason ||
+            'NVIDIA NVENC could not be initialized. Choose CPU encoding instead.'
+        )
+      }
+    }
 
     const selectedComposition = await selectComposition({
       serveUrl: bundled,
       id: 'MainComposition',
       inputProps,
+      binariesDirectory,
     })
     await fs.mkdir(path.dirname(request.outputPath), { recursive: true })
     await renderMedia({
@@ -92,8 +113,16 @@ export async function exportVideo(
       scale: request.width / selectedComposition.width,
       videoBitrate: request.videoBitrate as `${number}M`,
       audioBitrate: '192k',
-      x264Preset: request.encoder === 'cpu' ? 'medium' : null,
-      hardwareAcceleration: request.encoder === 'nvenc' ? 'if-possible' : 'disable',
+      binariesDirectory,
+      ...(request.encoder === 'nvenc'
+        ? {
+            hardwareAcceleration: 'required' as const,
+            logLevel: 'verbose' as const,
+          }
+        : {
+            hardwareAcceleration: 'disable' as const,
+            x264Preset: 'medium' as const,
+          }),
       cancelSignal,
       onProgress: ({ progress }) => {
         onProgress(Math.round(progress * 100))

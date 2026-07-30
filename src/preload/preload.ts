@@ -30,7 +30,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAutoStockEnabled: (enabled: boolean) =>
     ipcRenderer.invoke('set-auto-stock-enabled', enabled),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
-  trimYouTube: (url: string, startTime: number, endTime: number) => ipcRenderer.invoke('trim-youtube', url, startTime, endTime),
+  trimYouTube: (
+    url: string,
+    startTime: number,
+    endTime: number,
+    projectId: string
+  ) => ipcRenderer.invoke('trim-youtube', url, startTime, endTime, projectId),
   onYouTubeTrimProgress: (callback: (progress: number) => void) => {
     ipcRenderer.removeAllListeners('youtube-trim-progress')
     ipcRenderer.on('youtube-trim-progress', (_event, value) => callback(value))

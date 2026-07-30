@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   ChevronLeft,
   Download,
@@ -23,7 +24,20 @@ export default function Header() {
     future,
     undo,
     redo,
-  } = useEditorStore()
+  } = useEditorStore(
+    useShallow((state) => ({
+      projectName: state.projectName,
+      setProjectName: state.setProjectName,
+      apiKeys: state.apiKeys,
+      setApiKeys: state.setApiKeys,
+      closeProject: state.closeProject,
+      scenes: state.scenes,
+      history: state.history,
+      future: state.future,
+      undo: state.undo,
+      redo: state.redo,
+    }))
+  )
   const [showSettings, setShowSettings] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showExport, setShowExport] = useState(false)

@@ -10,7 +10,7 @@ import { createReadStream } from 'node:fs'
 import { createServer, Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import path from 'path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { transcribeAudio } from './services/groq'
 import { trimYouTube } from './services/sidecar'
 import { searchDuckDuckGoImages, searchImages } from './services/imageSearch'
@@ -276,6 +276,13 @@ async function getProjectPath(projectId: string) {
   return path.join(await getProjectsDirectory(), `${projectId}.json`)
 }
 
+async function getProjectYouTubeDirectory(projectId: string) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+    throw new Error('Invalid project id.')
+  }
+  return path.join(await getProjectsDirectory(), '.assets', projectId, 'youtube')
+}
+
 function cleanProjectName(name: string) {
   const cleaned = String(name || '')
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -385,6 +392,7 @@ ipcMain.handle('list-projects', async () => {
 async function loadProjectDocument(projectId: string) {
   const contents = await fs.readFile(await getProjectPath(projectId), 'utf8')
   const project = JSON.parse(contents) as ProjectDocument
+  const repairedYouTubeMedia = await repairYouTubeProjectMedia(project)
   if (project.audioFile?.path) {
     const audioPath = project.audioFile.path.startsWith('file:')
       ? fileURLToPath(project.audioFile.path)
@@ -423,7 +431,145 @@ async function loadProjectDocument(projectId: string) {
       media.sourceStartSec = media.sourceStartSec ?? 0
     }),
   ])
+  if (repairedYouTubeMedia) {
+    project.updatedAt = new Date().toISOString()
+    await writeProjectDocument(project)
+  }
   return project
+}
+
+async function repairYouTubeProjectMedia(project: ProjectDocument) {
+  const youtubeScenes = (project.scenes || []).filter(
+    (scene) => scene.media?.type === 'youtube_clip'
+  )
+  if (youtubeScenes.length === 0) return false
+
+  const library = project.mediaLibrary || []
+  let changed = !project.mediaLibrary
+  project.mediaLibrary = library
+  const durableDirectory = path.resolve(
+    await getProjectYouTubeDirectory(project.id)
+  )
+
+  for (const scene of youtubeScenes) {
+    const media = scene.media!
+    const beforeMedia = JSON.stringify(media)
+    const originalSource = media.sourceUrl
+    const localPath = persistedLocalPath(originalSource)
+    let sourceUrl = originalSource
+    let durationSec = media.sourceDurationSec ?? media.durationSec
+    let missing = true
+    let missingReason =
+      'The downloaded YouTube clip file is missing. Download it again from the YouTube search tab.'
+
+    if (localPath && (await pathExists(localPath))) {
+      missing = false
+      missingReason = ''
+      let durablePath = path.resolve(localPath)
+      if (
+        durablePath !== durableDirectory &&
+        !durablePath.startsWith(`${durableDirectory}${path.sep}`)
+      ) {
+        await fs.mkdir(durableDirectory, { recursive: true })
+        const safeId =
+          String(media.id || scene.id)
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .slice(0, 100) || randomUUID()
+        const extension = path.extname(durablePath) || '.mp4'
+        const destination = path.join(durableDirectory, `${safeId}${extension}`)
+        try {
+          if (!(await pathExists(destination))) {
+            await fs.copyFile(durablePath, destination)
+          }
+          durablePath = destination
+        } catch (error) {
+          console.warn('Could not migrate a YouTube clip into project storage.', error)
+        }
+      }
+      sourceUrl = pathToFileURL(durablePath).toString()
+      durationSec = (await getMediaDuration(durablePath)) || durationSec
+    }
+
+    const providerUrl =
+      media.providerUrl || youtubeUrlFromThumbnail(media.thumbnailUrl)
+    Object.assign(media, {
+      sourceUrl,
+      sourceStartSec: media.sourceStartSec ?? 0,
+      sourceDurationSec: durationSec,
+      providerUrl,
+      missing,
+      missingReason: missing ? missingReason : undefined,
+    })
+    if (JSON.stringify(media) !== beforeMedia) changed = true
+
+    const existingAsset = library.find(
+      (asset) =>
+        asset.id === media.id ||
+        asset.path === originalSource ||
+        asset.path === sourceUrl
+    )
+    const libraryDetails = {
+      id: media.id || randomUUID(),
+      name: media.title || 'YouTube clip',
+      path: sourceUrl,
+      kind: 'video' as const,
+      durationSec,
+      origin: 'youtube' as const,
+      thumbnailUrl: media.thumbnailUrl,
+      providerUrl,
+      providerStartSec: media.providerStartSec,
+      missing,
+      missingReason: missing ? missingReason : undefined,
+    }
+    if (existingAsset) {
+      const beforeAsset = JSON.stringify(existingAsset)
+      Object.assign(existingAsset, libraryDetails)
+      if (JSON.stringify(existingAsset) !== beforeAsset) changed = true
+    } else {
+      library.push(libraryDetails)
+      changed = true
+    }
+  }
+
+  return changed
+}
+
+function persistedLocalPath(source: string) {
+  if (!source || /^(https?:|data:|blob:)/i.test(source)) return null
+  if (source.startsWith('rhymx-media:')) {
+    try {
+      const url = new URL(source)
+      const decoded = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+      return path.isAbsolute(decoded) ? decoded : null
+    } catch {
+      return null
+    }
+  }
+  if (source.startsWith('file:')) {
+    try {
+      return fileURLToPath(source)
+    } catch {
+      const stripped = source.replace(/^file:\/\/+/i, '').replace(/^\/([a-zA-Z]:)/, '$1')
+      return path.isAbsolute(stripped) ? path.normalize(stripped) : null
+    }
+  }
+  return path.isAbsolute(source) ? path.normalize(source) : null
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function youtubeUrlFromThumbnail(thumbnailUrl: string) {
+  const videoId = /\/vi\/([^/?]+)/i.exec(thumbnailUrl || '')?.[1]
+  return videoId
+    ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
+    : undefined
 }
 
 ipcMain.handle('load-project', async (_, projectId: string) => {
@@ -508,12 +654,18 @@ ipcMain.handle('clear-cache', async () => {
   return await appSettings()
 })
 
-ipcMain.handle('trim-youtube', async (event, url: string, startTime: number, endTime: number) => {
+ipcMain.handle('trim-youtube', async (
+  event,
+  url: string,
+  startTime: number,
+  endTime: number,
+  projectId: string
+) => {
   return await trimYouTube(
     url,
     startTime,
     endTime,
-    getAppCacheDirectory(),
+    await getProjectYouTubeDirectory(projectId),
     (progress) => event.sender.send('youtube-trim-progress', progress)
   )
 })

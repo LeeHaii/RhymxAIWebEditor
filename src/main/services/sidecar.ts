@@ -10,11 +10,11 @@ export async function trimYouTube(
   url: string,
   startTime: number,
   endTime: number,
-  cacheDirectory: string,
+  outputDirectory: string,
   onProgress: (progress: number) => void = () => undefined
 ): Promise<string> {
-  await fs.mkdir(cacheDirectory, { recursive: true })
-  const outputPath = path.join(cacheDirectory, `rhymx_clip_${Date.now()}.mp4`)
+  await fs.mkdir(outputDirectory, { recursive: true })
+  const outputPath = path.join(outputDirectory, `rhymx_clip_${Date.now()}.mp4`)
 
   const ytdlpPath = await resolveYtDlpPath()
 

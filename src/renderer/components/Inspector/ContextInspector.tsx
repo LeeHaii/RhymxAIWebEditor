@@ -1,4 +1,5 @@
 import React, { KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   Captions,
   Check,
@@ -32,7 +33,9 @@ export default function ContextInspector() {
     activeSceneId,
     activeAudioClipId,
     activeSubtitleId,
+    projectId,
     setActiveSubtitleId,
+    addMediaAssets,
     assignMediaToScene,
     updateScene,
     updateAudioClip,
@@ -41,7 +44,28 @@ export default function ContextInspector() {
     apiKeys,
     subtitleSettings,
     updateSubtitleSettings,
-  } = useEditorStore()
+  } = useEditorStore(
+    useShallow((state) => ({
+      scenes: state.scenes,
+      videoTracks: state.videoTracks,
+      audioClips: state.audioClips,
+      subtitles: state.subtitles,
+      activeSceneId: state.activeSceneId,
+      activeAudioClipId: state.activeAudioClipId,
+      activeSubtitleId: state.activeSubtitleId,
+      projectId: state.projectId,
+      setActiveSubtitleId: state.setActiveSubtitleId,
+      addMediaAssets: state.addMediaAssets,
+      assignMediaToScene: state.assignMediaToScene,
+      updateScene: state.updateScene,
+      updateAudioClip: state.updateAudioClip,
+      updateSubtitle: state.updateSubtitle,
+      splitSubtitle: state.splitSubtitle,
+      apiKeys: state.apiKeys,
+      subtitleSettings: state.subtitleSettings,
+      updateSubtitleSettings: state.updateSubtitleSettings,
+    }))
+  )
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('properties')
   const [activeTab, setActiveTab] = useState<SearchTab>('duckduckgo')
   const [searchQuery, setSearchQuery] = useState('')
@@ -213,7 +237,7 @@ export default function ContextInspector() {
   }
 
   const handleYoutubeTrim = async () => {
-    if (!activeSceneId || !selectedYoutube || !activeScene) return
+    if (!activeSceneId || !selectedYoutube || !activeScene || !projectId) return
     const start = Math.max(0, ytStart)
     const end = start + activeScene.durationSec
     setIsTrimming(true)
@@ -223,16 +247,35 @@ export default function ContextInspector() {
       const localPath = await window.electronAPI.trimYouTube(
         selectedYoutube.url,
         start,
-        end
+        end,
+        projectId
       )
+      const mediaId = `yt_${Date.now()}`
+      addMediaAssets([
+        {
+          id: mediaId,
+          name: selectedYoutube.title,
+          path: localPath,
+          kind: 'video',
+          durationSec: activeScene.durationSec,
+          origin: 'youtube',
+          thumbnailUrl: selectedYoutube.thumbnailUrl,
+          providerUrl: selectedYoutube.url,
+          providerStartSec: start,
+        },
+      ])
       assignMediaToScene(activeSceneId, {
-        id: `yt_${Date.now()}`,
+        id: mediaId,
         type: 'youtube_clip',
+        kind: 'video',
         sourceUrl: localPath,
         thumbnailUrl: selectedYoutube.thumbnailUrl,
         title: selectedYoutube.title,
         sourceStartSec: 0,
         sourceDurationSec: activeScene.durationSec,
+        providerUrl: selectedYoutube.url,
+        providerStartSec: start,
+        missing: false,
       })
     } catch (error) {
       setTrimProgress(null)

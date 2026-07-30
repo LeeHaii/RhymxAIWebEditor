@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Minus, Plus } from 'lucide-react'
+import { LoaderCircle, Minus, Plus } from 'lucide-react'
 import { Player, PlayerRef } from '@remotion/player'
 import { MainComposition } from '../../remotion/Composition'
 import { useEditorStore } from '../../store/useEditorStore'
+import { SceneSegment } from '../../types/editor'
 
 const QUALITY_SIZES = {
   low: { width: 640, height: 360 },
@@ -10,6 +11,52 @@ const QUALITY_SIZES = {
   high: { width: 1920, height: 1080 },
   ultra: { width: 3840, height: 2160 },
 } as const
+
+const mediaSignature = (scene: SceneSegment) =>
+  scene.media
+    ? `${scene.media.type}\u0000${scene.media.sourceUrl}\u0000${
+        scene.media.sourceStartSec ?? 0
+      }`
+    : ''
+
+const isVideoScene = (scene: SceneSegment) =>
+  scene.media?.type === 'pexels_video' ||
+  scene.media?.type === 'youtube_clip' ||
+  scene.media?.type === 'local_video'
+
+const nextPaint = () =>
+  new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  )
+
+async function waitForSceneMedia(
+  container: HTMLDivElement | null,
+  scene: SceneSegment,
+  timeoutMs = 2500
+) {
+  if (!scene.media) return
+  const deadline = performance.now() + timeoutMs
+
+  while (performance.now() < deadline) {
+    const sceneNode = Array.from(
+      container?.querySelectorAll<HTMLElement>('[data-rhymx-scene-id]') || []
+    ).find((node) => node.dataset.rhymxSceneId === scene.id)
+    if (isVideoScene(scene)) {
+      const video = sceneNode?.querySelector('video')
+      if (
+        video &&
+        !video.seeking &&
+        video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+      ) {
+        return
+      }
+    } else {
+      const image = sceneNode?.querySelector('img')
+      if (image?.complete && image.naturalWidth > 0) return
+    }
+    await nextPaint()
+  }
+}
 
 export default function PlayerCanvas() {
   // Keep playback-clock updates from re-rendering the Player and recreating
@@ -30,8 +77,11 @@ export default function PlayerCanvas() {
   const setIsPlaying = useEditorStore((state) => state.setIsPlaying)
   const playerRef = useRef<PlayerRef>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const previousMediaRef = useRef<Map<string, string> | null>(null)
+  const mediaRefreshVersionRef = useRef(0)
   const [zoom, setZoom] = useState<'fit' | number>('fit')
   const [fitWidth, setFitWidth] = useState(960)
+  const [isRefreshingMedia, setIsRefreshingMedia] = useState(false)
   const [quality, setQuality] = useState<'low' | 'medium' | 'high' | 'ultra'>(
     () =>
       (localStorage.getItem('rhymx.previewQuality') as
@@ -99,14 +149,82 @@ export default function PlayerCanvas() {
   }, [quality])
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (playerRef.current) {
-        setCurrentTimeSec(playerRef.current.getCurrentFrame() / 30)
-        setIsPlaying(playerRef.current.isPlaying())
-      }
-    }, 100)
-    return () => window.clearInterval(interval)
+    const player = playerRef.current
+    if (!player) return
+    const syncFrame = () => setCurrentTimeSec(player.getCurrentFrame() / 30)
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
+    const onEnded = () => {
+      syncFrame()
+      setIsPlaying(false)
+    }
+
+    syncFrame()
+    setIsPlaying(player.isPlaying())
+    player.addEventListener('frameupdate', syncFrame)
+    player.addEventListener('seeked', syncFrame)
+    player.addEventListener('play', onPlay)
+    player.addEventListener('pause', onPause)
+    player.addEventListener('ended', onEnded)
+    return () => {
+      player.removeEventListener('frameupdate', syncFrame)
+      player.removeEventListener('seeked', syncFrame)
+      player.removeEventListener('play', onPlay)
+      player.removeEventListener('pause', onPause)
+      player.removeEventListener('ended', onEnded)
+    }
   }, [setCurrentTimeSec, setIsPlaying])
+
+  useEffect(() => {
+    const nextMedia = new Map(
+      scenes.map((scene) => [scene.id, mediaSignature(scene)] as const)
+    )
+    const previousMedia = previousMediaRef.current
+    previousMediaRef.current = nextMedia
+    if (!previousMedia) return
+
+    const player = playerRef.current
+    if (!player) return
+    const currentFrame = player.getCurrentFrame()
+    const currentTime = currentFrame / 30
+    const changedScene = scenes.find(
+      (scene) =>
+        previousMedia.get(scene.id) !== nextMedia.get(scene.id) &&
+        currentTime >= scene.startTimeSec &&
+        currentTime < scene.endTimeSec
+    )
+    if (!changedScene) return
+
+    const refreshVersion = ++mediaRefreshVersionRef.current
+    const wasPlaying = player.isPlaying()
+    const startFrame = Math.round(changedScene.startTimeSec * 30)
+    const endFrame = Math.max(startFrame, Math.round(changedScene.endTimeSec * 30) - 1)
+    const warmFrame =
+      currentFrame > startFrame
+        ? Math.max(startFrame, currentFrame - 2)
+        : Math.min(endFrame, currentFrame + 1)
+
+    player.pause()
+    setIsRefreshingMedia(true)
+    player.seekTo(warmFrame)
+
+    void (async () => {
+      await nextPaint()
+      if (refreshVersion !== mediaRefreshVersionRef.current) return
+      player.seekTo(currentFrame)
+      await waitForSceneMedia(player.getContainerNode(), changedScene)
+      if (refreshVersion !== mediaRefreshVersionRef.current) return
+      setIsRefreshingMedia(false)
+      if (wasPlaying) player.play()
+    })()
+  }, [scenes])
+
+  useEffect(
+    () => () => {
+      mediaRefreshVersionRef.current += 1
+    },
+    []
+  )
 
   useEffect(() => {
     playerRef.current?.seekTo(Math.round(seekTargetSec * 30))
@@ -178,7 +296,7 @@ export default function PlayerCanvas() {
 
       <div className="min-w-full min-h-full flex items-center justify-center py-8">
         <div
-          className="aspect-video bg-black shadow-2xl shadow-black/60 rounded-xl overflow-hidden border border-white/10 shrink-0"
+          className="relative aspect-video bg-black shadow-2xl shadow-black/60 rounded-xl overflow-hidden border border-white/10 shrink-0"
           style={{ width: fitWidth * (zoom === 'fit' ? 1 : zoom / 100) }}
         >
           <Player
@@ -193,6 +311,14 @@ export default function PlayerCanvas() {
             className={`preview-quality-${quality}`}
             controls
           />
+          {isRefreshingMedia && (
+            <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center bg-black/20">
+              <div className="rounded-lg border border-white/10 bg-[#101219]/90 px-3 py-2 flex items-center gap-2 text-[10px] text-slate-300 shadow-xl">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin text-violet-400" />
+                Buffering replacement media…
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

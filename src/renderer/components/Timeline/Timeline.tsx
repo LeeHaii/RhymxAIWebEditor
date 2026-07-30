@@ -1,4 +1,5 @@
 import React, { PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   Captions,
   Eye,
@@ -36,6 +37,66 @@ const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value))
 const toFrame = (seconds: number) => Math.round(seconds * FPS) / FPS
 
+function TimelineClock({ totalDuration }: { totalDuration: number }) {
+  const currentTimeSec = useEditorStore((state) => state.currentTimeSec)
+  return (
+    <div className="text-[10px] text-slate-500 font-mono">
+      {formatTime(currentTimeSec)} / {formatTime(totalDuration)}
+    </div>
+  )
+}
+
+function TimelinePlayhead({
+  totalDuration,
+  onPointerDown,
+}: {
+  totalDuration: number
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void
+}) {
+  const currentTimeSec = useEditorStore((state) => state.currentTimeSec)
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      className="absolute top-0 bottom-0 w-3 -translate-x-1/2 z-50 cursor-ew-resize group will-change-[left]"
+      style={{
+        left: `${clamp(currentTimeSec / Math.max(totalDuration, 0.001), 0, 1) * 100}%`,
+      }}
+      title="Drag playhead"
+    >
+      <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-px bg-rose-500" />
+      <div className="absolute -top-1 left-1/2 -translate-x-1/2 h-2.5 w-2.5 rotate-45 bg-rose-500 rounded-sm group-hover:scale-125" />
+    </div>
+  )
+}
+
+function SplitSceneButton() {
+  const { activeSceneId, scenes, currentTimeSec, splitScene } = useEditorStore(
+    useShallow((state) => ({
+      activeSceneId: state.activeSceneId,
+      scenes: state.scenes,
+      currentTimeSec: state.currentTimeSec,
+      splitScene: state.splitScene,
+    }))
+  )
+  const activeScene = scenes.find((scene) => scene.id === activeSceneId)
+  const canSplit =
+    Boolean(activeScene) &&
+    currentTimeSec > (activeScene?.startTimeSec || 0) + 0.2 &&
+    currentTimeSec < (activeScene?.endTimeSec || 0) - 0.2
+
+  return (
+    <button
+      onClick={() => activeSceneId && splitScene(activeSceneId, currentTimeSec)}
+      disabled={!canSplit}
+      className="h-8 px-3 rounded-lg hover:bg-white/5 disabled:text-slate-700 text-slate-400 flex items-center gap-2 text-xs"
+      title="Split selected scene at playhead (Ctrl+B)"
+    >
+      <Scissors className="h-3.5 w-3.5" />
+      Split <kbd className="text-[9px] text-slate-600">Ctrl+B</kbd>
+    </button>
+  )
+}
+
 export default function Timeline() {
   const {
     scenes,
@@ -51,9 +112,7 @@ export default function Timeline() {
     setActiveAudioClipId,
     setActiveSubtitleId,
     audioFile,
-    currentTimeSec,
     requestSeek,
-    splitScene,
     trimScene,
     checkpointHistory,
     deleteScene,
@@ -68,7 +127,38 @@ export default function Timeline() {
     moveAudioClip,
     removeAudioClip,
     trimAudioClip,
-  } = useEditorStore()
+  } = useEditorStore(
+    useShallow((state) => ({
+      scenes: state.scenes,
+      videoTracks: state.videoTracks,
+      voiceTrackSettings: state.voiceTrackSettings,
+      audioTrackSettings: state.audioTrackSettings,
+      subtitles: state.subtitles,
+      audioClips: state.audioClips,
+      activeSceneId: state.activeSceneId,
+      activeAudioClipId: state.activeAudioClipId,
+      activeSubtitleId: state.activeSubtitleId,
+      setActiveSceneId: state.setActiveSceneId,
+      setActiveAudioClipId: state.setActiveAudioClipId,
+      setActiveSubtitleId: state.setActiveSubtitleId,
+      audioFile: state.audioFile,
+      requestSeek: state.requestSeek,
+      trimScene: state.trimScene,
+      checkpointHistory: state.checkpointHistory,
+      deleteScene: state.deleteScene,
+      addVideoTrack: state.addVideoTrack,
+      removeVideoTrack: state.removeVideoTrack,
+      updateVideoTrack: state.updateVideoTrack,
+      updateVoiceTrackSettings: state.updateVoiceTrackSettings,
+      updateAudioTrackSettings: state.updateAudioTrackSettings,
+      addSceneFromAsset: state.addSceneFromAsset,
+      addAudioClip: state.addAudioClip,
+      moveScene: state.moveScene,
+      moveAudioClip: state.moveAudioClip,
+      removeAudioClip: state.removeAudioClip,
+      trimAudioClip: state.trimAudioClip,
+    }))
+  )
   const trackRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(() => {
     const savedZoom = Number(localStorage.getItem('rhymx.timelineZoom') || 100)
@@ -487,17 +577,11 @@ export default function Timeline() {
 
   const dropTime = (clientX: number) => {
     const rectangle = trackRef.current?.getBoundingClientRect()
-    if (!rectangle) return currentTimeSec
+    if (!rectangle) return useEditorStore.getState().currentTimeSec
     const rawTime =
       clamp((clientX - rectangle.left) / rectangle.width, 0, 1) * totalDuration
     return snapValue(rawTime, rectangle.width).value
   }
-
-  const activeScene = scenes.find((scene) => scene.id === activeSceneId)
-  const canSplit =
-    Boolean(activeScene) &&
-    currentTimeSec > (activeScene?.startTimeSec || 0) + 0.2 &&
-    currentTimeSec < (activeScene?.endTimeSec || 0) - 0.2
 
   return (
     <div
@@ -512,15 +596,7 @@ export default function Timeline() {
     >
       <div className="h-11 shrink-0 border-b border-white/5 flex items-center justify-between px-3">
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => activeSceneId && splitScene(activeSceneId, currentTimeSec)}
-            disabled={!canSplit}
-            className="h-8 px-3 rounded-lg hover:bg-white/5 disabled:text-slate-700 text-slate-400 flex items-center gap-2 text-xs"
-            title="Split selected scene at playhead (Ctrl+B)"
-          >
-            <Scissors className="h-3.5 w-3.5" />
-            Split <kbd className="text-[9px] text-slate-600">Ctrl+B</kbd>
-          </button>
+          <SplitSceneButton />
           <button
             onClick={() => activeSceneId && deleteScene(activeSceneId)}
             disabled={!activeSceneId}
@@ -556,9 +632,7 @@ export default function Timeline() {
             <Magnet className="h-3 w-3" />
             Snap
           </button>
-          <div className="text-[10px] text-slate-500 font-mono">
-            {formatTime(currentTimeSec)} / {formatTime(totalDuration)}
-          </div>
+          <TimelineClock totalDuration={totalDuration} />
           <div className="h-7 flex items-center gap-1 rounded-lg border border-white/5 bg-black/20 px-1.5">
             <button
               onClick={() => setZoom((value) => Math.max(100, value - 50))}
@@ -709,15 +783,10 @@ export default function Timeline() {
                 />
               )}
 
-              <div
+              <TimelinePlayhead
+                totalDuration={totalDuration}
                 onPointerDown={beginScrub}
-                className="absolute top-0 bottom-0 w-3 -translate-x-1/2 z-50 cursor-ew-resize group"
-                style={{ left: left(currentTimeSec) }}
-                title="Drag playhead"
-              >
-                <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-px bg-rose-500" />
-                <div className="absolute -top-1 left-1/2 -translate-x-1/2 h-2.5 w-2.5 rotate-45 bg-rose-500 rounded-sm group-hover:scale-125" />
-              </div>
+              />
 
               <div
                 className="absolute top-0 left-0 right-0 border-b border-white/5 p-1 pointer-events-none"

@@ -771,15 +771,24 @@ export const useEditorStore = create<EditorStore>((set) => ({
         keywords: [],
         media: {
           id: asset.id,
-          type: asset.kind === 'video' ? 'local_video' : 'local_image',
+          type:
+            asset.origin === 'youtube'
+              ? 'youtube_clip'
+              : asset.kind === 'video'
+                ? 'local_video'
+                : 'local_image',
           kind: asset.kind,
           sourceUrl: asset.path,
-          thumbnailUrl: asset.path,
+          thumbnailUrl: asset.thumbnailUrl || asset.path,
           title: asset.name,
           sourceStartSec: 0,
           sourceDurationSec: asset.durationSec,
+          providerUrl: asset.providerUrl,
+          providerStartSec: asset.providerStartSec,
           imageFit: 'cover',
           enableKenBurnsEffect: asset.kind === 'image',
+          missing: asset.missing,
+          missingReason: asset.missingReason,
         },
         trackId,
         volume: 1,
@@ -880,7 +889,12 @@ export const useEditorStore = create<EditorStore>((set) => ({
       subtitles.splice(index, 1, first, second)
       return historyChange(state, { subtitles, activeSubtitleId: second.id })
     }),
-  setCurrentTimeSec: (currentTimeSec) => set({ currentTimeSec }),
+  setCurrentTimeSec: (currentTimeSec) =>
+    set((state) =>
+      Math.abs(state.currentTimeSec - currentTimeSec) < 0.0001
+        ? state
+        : { currentTimeSec }
+    ),
   requestSeek: (seekTargetSec) =>
     set((state) => ({
       seekTargetSec,

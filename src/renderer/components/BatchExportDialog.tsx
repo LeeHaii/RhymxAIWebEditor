@@ -198,6 +198,17 @@ export default function BatchExportDialog({
               </select>
             </label>
           </div>
+          {encoder === 'nvenc' && (
+            <div className="text-[9px] text-emerald-400/80">
+              h264_nvenc was verified with a real test frame. Batch export will not
+              silently fall back to CPU encoding.
+            </div>
+          )}
+          {capabilities && !capabilities.nvenc && capabilities.nvencReason && (
+            <div className="text-[9px] text-amber-400/80 break-words">
+              {capabilities.nvencReason}
+            </div>
+          )}
 
           <div>
             <label className="text-[10px] text-slate-500">Output folder</label>
