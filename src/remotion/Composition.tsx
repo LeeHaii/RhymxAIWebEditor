@@ -9,15 +9,31 @@ import {
   useVideoConfig,
   Video,
 } from 'remotion'
-import { SceneSegment, SubtitleSettings, TimelineAudioClip } from '../types/editor'
+import {
+  SceneSegment,
+  SubtitleSegment,
+  SubtitleSettings,
+  TimelineAudioClip,
+  TrackSettings,
+  VideoTrack,
+} from '../types/editor'
 
 const defaultSubtitleSettings: SubtitleSettings = {
   enabled: true,
   fontSize: 48,
+  fontFamily: 'Inter, Arial, sans-serif',
+  fontWeight: 650,
   textColor: '#ffffff',
+  backgroundEnabled: true,
   backgroundColor: '#000000',
+  backgroundOpacity: 0.8,
+  outlineEnabled: false,
+  outlineColor: '#000000',
+  outlineWidth: 3,
   position: 'bottom',
 }
+
+const defaultTrackSettings: TrackSettings = { muted: false, visible: true }
 
 function mediaSource(source: string) {
   if (!source || /^(https?:|data:|blob:|file:)/.test(source)) return source
@@ -26,48 +42,91 @@ function mediaSource(source: string) {
 
 export const MainComposition: React.FC<{
   scenes: SceneSegment[]
+  subtitles?: SubtitleSegment[]
   audioPath: string
   audioClips?: TimelineAudioClip[]
   subtitleSettings?: SubtitleSettings
+  videoTracks?: VideoTrack[]
+  voiceTrackSettings?: TrackSettings
+  audioTrackSettings?: TrackSettings
+  renderScale?: number
 }> = ({
   scenes,
+  subtitles = [],
   audioPath,
   audioClips = [],
   subtitleSettings = defaultSubtitleSettings,
+  videoTracks = [],
+  voiceTrackSettings = defaultTrackSettings,
+  audioTrackSettings = defaultTrackSettings,
+  renderScale = 1,
 }) => {
   const { fps } = useVideoConfig()
+  const orderedScenes = [...scenes].sort((first, second) => {
+    const firstTrack = videoTracks.findIndex((track) => track.id === first.trackId)
+    const secondTrack = videoTracks.findIndex((track) => track.id === second.trackId)
+    const trackDifference =
+      (firstTrack < 0 ? 0 : firstTrack) - (secondTrack < 0 ? 0 : secondTrack)
+    return trackDifference || first.startTimeSec - second.startTimeSec
+  })
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#07080b' }}>
-      {audioPath && <Audio src={mediaSource(audioPath)} />}
+      {audioPath && voiceTrackSettings.visible && !voiceTrackSettings.muted && (
+        <Audio src={mediaSource(audioPath)} />
+      )}
 
-      {audioClips.map((clip) => (
-        <Sequence
-          key={clip.id}
-          from={Math.round(clip.startTimeSec * fps)}
-          durationInFrames={Math.max(1, Math.round(clip.durationSec * fps))}
-        >
-          <Audio src={mediaSource(clip.path)} volume={clip.volume} />
-        </Sequence>
-      ))}
+      {audioTrackSettings.visible &&
+        !audioTrackSettings.muted &&
+        audioClips.map((clip) => (
+          <Sequence
+            key={clip.id}
+            from={Math.round(clip.startTimeSec * fps)}
+            durationInFrames={Math.max(1, Math.round(clip.durationSec * fps))}
+          >
+            <Audio src={mediaSource(clip.path)} volume={clip.volume} />
+          </Sequence>
+        ))}
 
-      {scenes.map((scene) => (
-        <Sequence
-          key={scene.id}
-          from={Math.round(scene.startTimeSec * fps)}
-          durationInFrames={Math.max(1, Math.round(scene.durationSec * fps))}
-        >
-          <SceneContent scene={scene} subtitleSettings={subtitleSettings} />
-        </Sequence>
-      ))}
+      {orderedScenes.map((scene) => {
+        const track = videoTracks.find((item) => item.id === scene.trackId)
+        if (track && !track.visible) return null
+        return (
+          <Sequence
+            key={scene.id}
+            from={Math.round(scene.startTimeSec * fps)}
+            durationInFrames={Math.max(1, Math.round(scene.durationSec * fps))}
+          >
+            <SceneContent scene={scene} trackMuted={track?.muted || false} />
+          </Sequence>
+        )
+      })}
+
+      {subtitleSettings.enabled &&
+        subtitles.map((subtitle) => (
+          <Sequence
+            key={subtitle.id}
+            from={Math.round(subtitle.startTimeSec * fps)}
+            durationInFrames={Math.max(
+              1,
+              Math.round((subtitle.endTimeSec - subtitle.startTimeSec) * fps)
+            )}
+          >
+            <SubtitleContent
+              subtitle={subtitle}
+              settings={subtitleSettings}
+              renderScale={renderScale}
+            />
+          </Sequence>
+        ))}
     </AbsoluteFill>
   )
 }
 
-const SceneContent: React.FC<{
-  scene: SceneSegment
-  subtitleSettings: SubtitleSettings
-}> = ({ scene, subtitleSettings }) => {
+const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = ({
+  scene,
+  trackMuted,
+}) => {
   const { fps } = useVideoConfig()
   const frame = useCurrentFrame()
   const media = scene.media
@@ -91,7 +150,13 @@ const SceneContent: React.FC<{
     media?.type === 'local_video'
 
   return (
-    <AbsoluteFill>
+    <AbsoluteFill
+      style={{
+        opacity: scene.opacity ?? 1,
+        transform: `scale(${scene.scale ?? 1})`,
+        transformOrigin: 'center center',
+      }}
+    >
       {!media ? (
         <AbsoluteFill
           style={{
@@ -114,6 +179,7 @@ const SceneContent: React.FC<{
       ) : isVideo ? (
         <Video
           src={mediaSource(media.sourceUrl)}
+          volume={trackMuted ? 0 : (scene.volume ?? 1)}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
@@ -129,34 +195,55 @@ const SceneContent: React.FC<{
           />
         </AbsoluteFill>
       )}
-
-      {subtitleSettings.enabled && scene.transcriptText && (
-        <AbsoluteFill
-          style={{
-            justifyContent: subtitleSettings.position === 'center' ? 'center' : 'flex-end',
-            paddingBottom: subtitleSettings.position === 'bottom' ? 72 : 0,
-            alignItems: 'center',
-            pointerEvents: 'none',
-          }}
-        >
-          <p
-            style={{
-              color: subtitleSettings.textColor,
-              fontSize: subtitleSettings.fontSize,
-              lineHeight: 1.25,
-              fontWeight: 650,
-              textAlign: 'center',
-              backgroundColor: `${subtitleSettings.backgroundColor}cc`,
-              margin: '0 110px',
-              padding: '12px 24px',
-              borderRadius: 12,
-              textShadow: '0 2px 8px rgba(0,0,0,.55)',
-            }}
-          >
-            {scene.transcriptText}
-          </p>
-        </AbsoluteFill>
-      )}
     </AbsoluteFill>
   )
+}
+
+const SubtitleContent: React.FC<{
+  subtitle: SubtitleSegment
+  settings: SubtitleSettings
+  renderScale: number
+}> = ({ subtitle, settings, renderScale }) => (
+  <AbsoluteFill
+    style={{
+      justifyContent: settings.position === 'center' ? 'center' : 'flex-end',
+      paddingBottom: settings.position === 'bottom' ? 72 * renderScale : 0,
+      alignItems: 'center',
+      pointerEvents: 'none',
+    }}
+  >
+    <p
+      style={{
+        color: settings.textColor,
+        fontSize: settings.fontSize * renderScale,
+        fontFamily: settings.fontFamily,
+        lineHeight: 1.25,
+        fontWeight: settings.fontWeight,
+        textAlign: 'center',
+        whiteSpace: 'pre-line',
+        backgroundColor: settings.backgroundEnabled
+          ? colorWithOpacity(settings.backgroundColor, settings.backgroundOpacity)
+          : 'transparent',
+        margin: `0 ${110 * renderScale}px`,
+        padding: `${12 * renderScale}px ${24 * renderScale}px`,
+        borderRadius: 12 * renderScale,
+        textShadow: `0 ${2 * renderScale}px ${8 * renderScale}px rgba(0,0,0,.55)`,
+        WebkitTextStroke: settings.outlineEnabled
+          ? `${settings.outlineWidth * renderScale}px ${settings.outlineColor}`
+          : undefined,
+        paintOrder: 'stroke fill',
+      }}
+    >
+      {subtitle.text}
+    </p>
+  </AbsoluteFill>
+)
+
+function colorWithOpacity(color: string, opacity: number) {
+  const normalized = color.replace('#', '')
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return color
+  const red = Number.parseInt(normalized.slice(0, 2), 16)
+  const green = Number.parseInt(normalized.slice(2, 4), 16)
+  const blue = Number.parseInt(normalized.slice(4, 6), 16)
+  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, opacity))})`
 }

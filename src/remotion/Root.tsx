@@ -13,13 +13,25 @@ export const Root: React.FC = () => {
         height={1080}
         defaultProps={{
           scenes: [],
+          videoTracks: [],
+          voiceTrackSettings: { muted: false, visible: true },
+          audioTrackSettings: { muted: false, visible: true },
+          renderScale: 1,
+          subtitles: [],
           audioPath: '',
           audioClips: [],
           subtitleSettings: {
             enabled: true,
             fontSize: 48,
+            fontFamily: 'Inter, Arial, sans-serif',
+            fontWeight: 650,
             textColor: '#ffffff',
+            backgroundEnabled: true,
             backgroundColor: '#000000',
+            backgroundOpacity: 0.8,
+            outlineEnabled: false,
+            outlineColor: '#000000',
+            outlineWidth: 3,
             position: 'bottom' as const,
           },
         }}
@@ -28,8 +40,9 @@ export const Root: React.FC = () => {
             1,
             Math.ceil(
               Math.max(
-                10,
+                1,
                 ...props.scenes.map((scene) => scene.endTimeSec),
+                ...(props.subtitles || []).map((subtitle) => subtitle.endTimeSec),
                 ...(props.audioClips || []).map(
                   (clip) => clip.startTimeSec + clip.durationSec
                 )

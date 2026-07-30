@@ -13,6 +13,33 @@ function isUnavailableModelError(error: unknown) {
   )
 }
 
+function normalizeSceneLength(scenes: any[]) {
+  const normalized: any[] = []
+  for (const scene of scenes) {
+    const start = Number(scene.startTimeSec) || 0
+    const end = Number(scene.endTimeSec) || start
+    const duration = Math.max(0, end - start)
+    const chunkCount = duration > 6.5 ? Math.max(2, Math.round(duration / 5)) : 1
+    const words = String(scene.transcriptText || '').trim().split(/\s+/).filter(Boolean)
+
+    for (let index = 0; index < chunkCount; index += 1) {
+      const chunkStart = start + (duration * index) / chunkCount
+      const chunkEnd = start + (duration * (index + 1)) / chunkCount
+      const wordStart = Math.round((words.length * index) / chunkCount)
+      const wordEnd = Math.round((words.length * (index + 1)) / chunkCount)
+      normalized.push({
+        ...scene,
+        id: `scene_${normalized.length + 1}`,
+        startTimeSec: chunkStart,
+        endTimeSec: chunkEnd,
+        durationSec: chunkEnd - chunkStart,
+        transcriptText: words.slice(wordStart, wordEnd).join(' '),
+      })
+    }
+  }
+  return normalized
+}
+
 export async function transcribeAudio(filePath: string, apiKey: string): Promise<any[]> {
   const trimmedApiKey = apiKey.trim()
   if (!trimmedApiKey) {
@@ -41,7 +68,8 @@ export async function transcribeAudio(filePath: string, apiKey: string): Promise
 
     const prompt = `
       Listen to the following audio voiceover.
-      Split it into logical scenes (each roughly 3 to 10 seconds).
+      Split it into logical scenes that target 5 seconds each.
+      Prefer 4 to 6 seconds per scene and avoid scenes longer than 6 seconds.
       For each scene, output:
       1. id: "scene_X"
       2. startTimeSec: float in seconds
@@ -97,7 +125,7 @@ export async function transcribeAudio(filePath: string, apiKey: string): Promise
     }
 
     const json = JSON.parse(text)
-    return json.scenes || []
+    return normalizeSceneLength(json.scenes || [])
 
   } catch (error) {
     console.error("Transcription error:", error)

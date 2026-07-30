@@ -1,277 +1,881 @@
-import React, { useState, useEffect } from 'react'
+import React, { KeyboardEvent, useEffect, useState } from 'react'
+import {
+  Captions,
+  Check,
+  Crop,
+  Image as ImageIcon,
+  KeyRound,
+  Search,
+  SlidersHorizontal,
+  Video,
+  Youtube,
+} from 'lucide-react'
+import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
 import { useEditorStore } from '../../../store/useEditorStore'
-import { Captions, Crop, Image as ImageIcon, Search, Video, Youtube } from 'lucide-react'
+import { searchGoogleImagesWithElement } from '../../services/googleSearchElement'
+
+type InspectorTab = 'properties' | 'media' | 'subtitles'
+type SearchTab = 'google' | 'pexels-image' | 'pexels-video' | 'youtube'
 
 export default function ContextInspector() {
   const {
     scenes,
+    videoTracks,
+    audioClips,
+    subtitles,
     activeSceneId,
+    activeAudioClipId,
+    activeSubtitleId,
+    setActiveSubtitleId,
     assignMediaToScene,
     updateScene,
+    updateAudioClip,
+    updateSubtitle,
+    splitSubtitle,
     apiKeys,
     subtitleSettings,
     updateSubtitleSettings,
   } = useEditorStore()
-  const [activeTab, setActiveTab] = useState<'pexels' | 'youtube' | 'images'>('images')
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('properties')
+  const [activeTab, setActiveTab] = useState<SearchTab>('google')
   const [searchQuery, setSearchQuery] = useState('')
   const [results, setResults] = useState<any[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  
-  // YouTube Trim Modal State
-  const [ytUrl, setYtUrl] = useState('')
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [selectedYoutube, setSelectedYoutube] = useState<YouTubeSearchResult | null>(null)
+  const [selectedPexels, setSelectedPexels] = useState<any | null>(null)
   const [ytStart, setYtStart] = useState(0)
-  const [ytEnd, setYtEnd] = useState(10)
   const [isTrimming, setIsTrimming] = useState(false)
 
-  const activeScene = scenes.find(s => s.id === activeSceneId)
+  const activeScene = scenes.find((scene) => scene.id === activeSceneId)
+  const activeAudioClip = audioClips.find((clip) => clip.id === activeAudioClipId)
+  const activeSubtitle =
+    subtitles.find((subtitle) => subtitle.id === activeSubtitleId) ||
+    (activeScene
+      ? subtitles.find(
+          (subtitle) =>
+            subtitle.startTimeSec < activeScene.endTimeSec &&
+            subtitle.endTimeSec > activeScene.startTimeSec
+        )
+      : undefined)
 
-  // Auto-update search query when scene changes
   useEffect(() => {
-    if (activeScene && activeScene.keywords.length > 0) {
-      setSearchQuery(activeScene.keywords[0])
-    } else {
-      setSearchQuery('')
-    }
+    setSearchQuery(activeScene?.keywords[0] || '')
     setResults([])
+    setSearchError(null)
+    setHasSearched(false)
+    setSelectedYoutube(null)
+    setSelectedPexels(null)
+    setYtStart(0)
   }, [activeScene?.id])
 
   const handleSearch = async () => {
-    if (!searchQuery) return
+    const query = searchQuery.trim()
+    if (!query) return
     setIsSearching(true)
-    
+    setSearchError(null)
+    setHasSearched(true)
+    setSelectedYoutube(null)
+    setSelectedPexels(null)
+
     try {
-      if (activeTab === 'images') {
-        const res = await window.electronAPI.searchImages(searchQuery)
-        setResults(res)
-      } else if (activeTab === 'pexels') {
-        if (!apiKeys.pexels) {
-          alert('Please set Pexels API key in Settings.')
-          return
+      if (activeTab === 'google') {
+        setResults(await searchGoogleImagesWithElement(apiKeys.googleSearchCx, query))
+      } else if (activeTab === 'pexels-image') {
+        setResults(await window.electronAPI.searchImages(query, apiKeys.pexels))
+      } else if (activeTab === 'pexels-video') {
+        if (!apiKeys.pexels.trim()) {
+          throw new Error('Add a Pexels API key in Settings before searching Pexels Video.')
         }
-        // Simple client fetch to Pexels API
-        const res = await fetch(`https://api.pexels.com/videos/search?query=${searchQuery}&per_page=10`, {
-          headers: { Authorization: apiKeys.pexels }
-        }).then(r => r.json())
-        setResults(res.videos || [])
+        const response = await fetch(
+          `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=12`,
+          { headers: { Authorization: apiKeys.pexels.trim() } }
+        )
+        if (!response.ok) throw new Error(`Pexels search failed (${response.status}).`)
+        const data = await response.json()
+        setResults(data.videos || [])
+      } else {
+        setResults(await window.electronAPI.searchYouTube(query, apiKeys.youtube))
       }
-      // YouTube search would use a similar API, skipped for demo brevity. We'll rely on direct URL input for YT.
-    } catch (err) {
-      console.error(err)
+    } catch (error) {
+      setResults([])
+      setSearchError(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSearching(false)
     }
   }
 
-  const applyImage = (url: string, title: string) => {
+  const applyImage = (image: ImageSearchResult) => {
     if (!activeSceneId) return
     assignMediaToScene(activeSceneId, {
-      id: `img_${Date.now()}`,
+      id: image.id,
       type: 'google_image',
-      sourceUrl: url,
-      thumbnailUrl: url,
-      title: title,
+      sourceUrl: image.sourceUrl,
+      thumbnailUrl: image.thumbnailUrl,
+      title: image.title,
       imageFit: 'cover',
-      enableKenBurnsEffect: true
+      enableKenBurnsEffect: true,
     })
   }
 
+  const pexelsVideoUrl = (video: any) =>
+    video?.video_files?.find(
+      (item: any) => item.quality === 'hd' && item.width && item.width <= 1920
+    )?.link ||
+    video?.video_files?.find((item: any) => item.quality === 'hd')?.link ||
+    video?.video_files?.[0]?.link ||
+    ''
+
   const applyPexels = (video: any) => {
     if (!activeSceneId) return
-    // find best hd file
-    const file = video.video_files.find((f: any) => f.quality === 'hd') || video.video_files[0]
+    const sourceUrl = pexelsVideoUrl(video)
+    if (!sourceUrl) return
     assignMediaToScene(activeSceneId, {
       id: `pex_${video.id}`,
       type: 'pexels_video',
-      sourceUrl: file.link,
+      sourceUrl,
       thumbnailUrl: video.image,
-      title: video.url
+      title: video.user?.name || video.url,
     })
   }
 
   const handleYoutubeTrim = async () => {
-    if (!activeSceneId || !ytUrl) return
+    if (!activeSceneId || !selectedYoutube || !activeScene) return
+    const start = Math.max(0, ytStart)
+    const end = start + activeScene.durationSec
     setIsTrimming(true)
+    setSearchError(null)
     try {
-      const localPath = await window.electronAPI.trimYouTube(ytUrl, ytStart, ytEnd)
+      const localPath = await window.electronAPI.trimYouTube(
+        selectedYoutube.url,
+        start,
+        end
+      )
       assignMediaToScene(activeSceneId, {
         id: `yt_${Date.now()}`,
         type: 'youtube_clip',
         sourceUrl: localPath,
-        thumbnailUrl: '', // Could fetch YT thumbnail
-        title: 'YouTube Clip'
+        thumbnailUrl: selectedYoutube.thumbnailUrl,
+        title: selectedYoutube.title,
       })
-      setYtUrl('')
-    } catch (err) {
-      alert('Failed to trim YouTube video.')
+    } catch (error) {
+      setSearchError(
+        error instanceof Error ? error.message : 'Failed to download the YouTube clip.'
+      )
     } finally {
       setIsTrimming(false)
     }
   }
 
-  if (!activeScene) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-slate-500 p-8 text-center">
-        Select a scene in the timeline to inspect and attach media.
-      </div>
-    )
+  const handleSubtitleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || !activeSubtitle) return
+    event.preventDefault()
+    splitSubtitle(activeSubtitle.id, event.currentTarget.selectionStart)
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-800">
-      <div className="p-4 border-b border-slate-700 bg-slate-900/50">
-        <h3 className="font-semibold text-white mb-2">Scene Inspector</h3>
-        <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">
-          Subtitle text
-        </label>
-        <textarea
-          value={activeScene.transcriptText}
-          onChange={(event) => updateScene(activeScene.id, { transcriptText: event.target.value })}
-          className="w-full h-20 resize-none text-xs text-slate-300 mb-3 bg-[#0c0e13] p-2.5 rounded-lg border border-white/10 focus:border-violet-500/50 outline-none"
-        />
-        
-        <div className="flex flex-wrap gap-2 mb-3">
-          {activeScene.keywords.map(kw => (
-            <span key={kw} className="text-[10px] bg-indigo-900/50 text-indigo-300 px-2 py-1 rounded border border-indigo-700/50 cursor-pointer hover:bg-indigo-800/50" onClick={() => setSearchQuery(kw)}>
-              {kw}
-            </span>
+    <div className="flex flex-col h-full bg-[#111319] min-w-0">
+      <div id="rhymx-google-cse-host" className="hidden" aria-hidden="true" />
+      <div className="px-3 pt-3 bg-[#0e1016] border-b border-white/5">
+        <h3 className="font-semibold text-sm text-white mb-3">Inspector</h3>
+        <div className="flex">
+          {([
+            ['properties', SlidersHorizontal, 'Properties'],
+            ['media', ImageIcon, 'Media'],
+            ['subtitles', Captions, 'Subtitles'],
+          ] as const).map(([tab, Icon, label]) => (
+            <button
+              key={tab}
+              onClick={() => setInspectorTab(tab)}
+              className={`flex-1 py-2.5 text-[10px] flex items-center justify-center gap-1 ${
+                inspectorTab === tab
+                  ? 'border-b-2 border-violet-500 text-violet-300'
+                  : 'text-slate-600 hover:text-slate-300'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
           ))}
         </div>
-
-        <div className="flex gap-2">
-          <input 
-            type="text" 
-            className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-white"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSearch()}
-            placeholder="Search media..."
-          />
-          <button onClick={handleSearch} className="bg-indigo-600 hover:bg-indigo-500 p-2 rounded text-white transition-colors">
-            <Search className="w-4 h-4" />
-          </button>
-        </div>
       </div>
 
-      <div className="flex border-b border-slate-700">
-        <button onClick={() => setActiveTab('images')} className={`flex-1 py-3 text-sm flex items-center justify-center gap-2 ${activeTab === 'images' ? 'border-b-2 border-indigo-500 text-indigo-400 bg-slate-800' : 'text-slate-500 hover:bg-slate-700/50 bg-slate-900/20'}`}>
-          <ImageIcon className="w-4 h-4" /> Images
-        </button>
-        <button onClick={() => setActiveTab('pexels')} className={`flex-1 py-3 text-sm flex items-center justify-center gap-2 ${activeTab === 'pexels' ? 'border-b-2 border-indigo-500 text-indigo-400 bg-slate-800' : 'text-slate-500 hover:bg-slate-700/50 bg-slate-900/20'}`}>
-          <Video className="w-4 h-4" /> Pexels
-        </button>
-        <button onClick={() => setActiveTab('youtube')} className={`flex-1 py-3 text-sm flex items-center justify-center gap-2 ${activeTab === 'youtube' ? 'border-b-2 border-indigo-500 text-indigo-400 bg-slate-800' : 'text-slate-500 hover:bg-slate-700/50 bg-slate-900/20'}`}>
-          <Youtube className="w-4 h-4" /> YouTube
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-        {isSearching ? (
-          <div className="text-center text-slate-500 mt-10">Searching...</div>
-        ) : (
-          <div className="space-y-4">
-            
-            {activeTab === 'images' && results.map(img => (
-              <div key={img.id} onClick={() => applyImage(img.sourceUrl, img.title)} className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-700 hover:border-indigo-500 transition-colors">
-                <img src={img.thumbnailUrl} alt={img.title} className="w-full h-40 object-cover" />
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                  <span className="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-full shadow-lg">Apply Image</span>
-                </div>
+      {inspectorTab === 'properties' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4">
+          {activeScene ? (
+            <SceneProperties
+              scene={activeScene}
+              videoTracks={videoTracks}
+              updateScene={updateScene}
+              activeSubtitle={activeSubtitle}
+              setActiveSubtitleId={setActiveSubtitleId}
+              updateSubtitle={updateSubtitle}
+              handleSubtitleKeyDown={handleSubtitleKeyDown}
+            />
+          ) : activeAudioClip ? (
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">
+                  Audio segment
+                </h4>
+                <div className="text-xs text-slate-200 truncate">{activeAudioClip.name}</div>
               </div>
-            ))}
-
-            {activeTab === 'pexels' && results.map(vid => (
-              <div key={vid.id} onClick={() => applyPexels(vid)} className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-700 hover:border-indigo-500 transition-colors">
-                <img src={vid.image} alt="Thumbnail" className="w-full h-40 object-cover" />
-                {/* Hover Video Preview implementation could go here using video.video_files */}
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                  <span className="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-full shadow-lg">Apply Video</span>
-                </div>
-              </div>
-            ))}
-
-            {activeTab === 'youtube' && (
-              <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2"><Crop className="w-4 h-4 text-indigo-400"/> Trim YouTube URL</h4>
-                <input 
-                  type="text"
-                  placeholder="https://youtube.com/watch?v=..."
-                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-300 mb-3"
-                  value={ytUrl}
-                  onChange={e => setYtUrl(e.target.value)}
+              <div className="grid grid-cols-2 gap-2">
+                <NumberProperty
+                  label="Start (seconds)"
+                  value={activeAudioClip.startTimeSec}
+                  minimum={0}
+                  onChange={(startTimeSec) =>
+                    updateAudioClip(activeAudioClip.id, { startTimeSec })
+                  }
                 />
-                <div className="flex gap-2 mb-4">
-                  <div className="flex-1">
-                    <label className="text-xs text-slate-500 block mb-1">Start (sec)</label>
-                    <input type="number" value={ytStart} onChange={e => setYtStart(Number(e.target.value))} className="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-sm text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <label className="text-xs text-slate-500 block mb-1">End (sec)</label>
-                    <input type="number" value={ytEnd} onChange={e => setYtEnd(Number(e.target.value))} className="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-sm text-white" />
-                  </div>
-                </div>
-                <button 
-                  onClick={handleYoutubeTrim} 
-                  disabled={!ytUrl || isTrimming}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-2 rounded text-sm text-white transition-colors"
+                <NumberProperty
+                  label="Duration (seconds)"
+                  value={activeAudioClip.durationSec}
+                  minimum={0.2}
+                  onChange={(durationSec) =>
+                    updateAudioClip(activeAudioClip.id, { durationSec })
+                  }
+                />
+              </div>
+              <PropertySlider
+                label="Volume"
+                value={activeAudioClip.volume}
+                minimum={0}
+                maximum={1}
+                step={0.05}
+                display={`${Math.round(activeAudioClip.volume * 100)}%`}
+                onChange={(volume) => updateAudioClip(activeAudioClip.id, { volume })}
+              />
+            </div>
+          ) : (
+            <EmptyInspector text="Select a visual or audio segment in the timeline to edit its properties." />
+          )}
+        </div>
+      ) : inspectorTab === 'subtitles' ? (
+        <SubtitleSettingsPanel
+          settings={subtitleSettings}
+          updateSettings={updateSubtitleSettings}
+        />
+      ) : !activeScene ? (
+        <EmptyInspector text="Select a visual segment before attaching searched media." />
+      ) : (
+        <>
+          <div className="p-3 border-b border-white/5 bg-[#0e1016]">
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {activeScene.keywords.map((keyword) => (
+                <button
+                  key={keyword}
+                  className="text-[9px] bg-violet-500/10 text-violet-300 px-2 py-1 rounded border border-violet-500/15 hover:bg-violet-500/20"
+                  onClick={() => setSearchQuery(keyword)}
                 >
-                  {isTrimming ? 'Downloading & Trimming...' : 'Download Clip'}
+                  {keyword}
                 </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                className="flex-1 min-w-0 bg-[#090b10] border border-white/10 focus:border-violet-500/50 outline-none rounded-lg px-2.5 py-2 text-xs text-white"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && handleSearch()}
+                placeholder={`Search ${tabLabel(activeTab)}…`}
+              />
+              <button
+                onClick={handleSearch}
+                disabled={isSearching}
+                className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 p-2 rounded-lg text-white"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 border-b border-white/5">
+            {([
+              ['google', ImageIcon, 'Google'],
+              ['pexels-image', ImageIcon, 'Pexels Img'],
+              ['pexels-video', Video, 'Pexels Vid'],
+              ['youtube', Youtube, 'YouTube'],
+            ] as const).map(([tab, Icon, label]) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab)
+                  setResults([])
+                  setHasSearched(false)
+                  setSearchError(null)
+                  setSelectedPexels(null)
+                  setSelectedYoutube(null)
+                }}
+                className={`min-w-0 py-2 text-[9px] flex flex-col items-center gap-1 ${
+                  activeTab === tab
+                    ? 'border-b-2 border-violet-500 text-violet-300 bg-white/[0.025]'
+                    : 'text-slate-600 hover:text-slate-300'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span className="truncate max-w-full px-1">{label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 custom-scrollbar">
+            {searchError && (
+              <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-[11px] text-red-300">
+                {searchError}
+                {((activeTab === 'youtube' && !apiKeys.youtube) ||
+                  (activeTab === 'google' && !apiKeys.googleSearchCx)) && (
+                  <div className="mt-2 flex items-center gap-1.5 text-red-200/70">
+                    <KeyRound className="h-3 w-3" />
+                    Add the required credential in the top-right Settings menu.
+                  </div>
+                )}
               </div>
             )}
-            
-            {results.length === 0 && !isSearching && activeTab !== 'youtube' && (
-              <div className="text-center text-slate-500 mt-10">No results found.</div>
+
+            {isSearching ? (
+              <div className="text-center text-xs text-slate-500 mt-10">Searching…</div>
+            ) : (
+              <div className="space-y-3">
+                {activeTab === 'google' && results.length > 0 && (
+                  <div className="text-[9px] text-slate-600 text-right">Powered by Google</div>
+                )}
+
+                {(activeTab === 'google' || activeTab === 'pexels-image') &&
+                  (results as ImageSearchResult[]).map((image) => (
+                    <ImageResult key={image.id} image={image} onUse={applyImage} />
+                  ))}
+
+                {activeTab === 'pexels-video' && selectedPexels && (
+                  <div className="rounded-lg overflow-hidden border border-violet-500/40 bg-black/30">
+                    <video
+                      src={pexelsVideoUrl(selectedPexels)}
+                      poster={selectedPexels.image}
+                      controls
+                      className="w-full aspect-video bg-black"
+                    />
+                    <button
+                      onClick={() => applyPexels(selectedPexels)}
+                      className="w-full bg-violet-600 hover:bg-violet-500 py-2 text-[10px]"
+                    >
+                      Use this video
+                    </button>
+                  </div>
+                )}
+
+                {activeTab === 'pexels-video' &&
+                  results.map((video) => (
+                    <button
+                      key={video.id}
+                      onClick={() => setSelectedPexels(video)}
+                      className={`relative group w-full rounded-lg overflow-hidden border ${
+                        selectedPexels?.id === video.id
+                          ? 'border-violet-400'
+                          : 'border-white/8 hover:border-violet-500/50'
+                      }`}
+                    >
+                      <img src={video.image} alt="" className="w-full h-36 object-cover" />
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 text-transparent group-hover:text-white text-[10px]">
+                        Preview
+                      </span>
+                    </button>
+                  ))}
+
+                {activeTab === 'youtube' && selectedYoutube && (
+                  <div className="rounded-lg border border-red-500/25 bg-red-500/[0.04] overflow-hidden">
+                    <iframe
+                      src={`https://www.youtube-nocookie.com/embed/${selectedYoutube.id}`}
+                      title={selectedYoutube.title}
+                      className="w-full aspect-video bg-black"
+                      allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
+                    <div className="p-3">
+                      <h4 className="text-[11px] font-medium text-slate-200 mb-2 flex items-center gap-2">
+                        <Crop className="w-3.5 h-3.5 text-red-400" />
+                        Trim selected result
+                      </h4>
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        <label className="text-[9px] text-slate-500">
+                          Start timestamp
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={ytStart}
+                            onChange={(event) => setYtStart(Number(event.target.value))}
+                            className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-1.5 text-[10px] text-white"
+                          />
+                        </label>
+                        <div className="text-[9px] text-slate-500">
+                          Segment duration
+                          <div className="mt-1 rounded border border-white/10 bg-[#090b10] p-1.5 text-[10px] text-slate-300">
+                            {activeScene.durationSec.toFixed(2)} seconds
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleYoutubeTrim}
+                        disabled={isTrimming}
+                        className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-50 py-2 rounded text-[10px] text-white"
+                      >
+                        {isTrimming ? 'Downloading clip…' : 'Add clip to segment'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'youtube' &&
+                  (results as YouTubeSearchResult[]).map((video) => (
+                    <button
+                      key={video.id}
+                      onClick={() => setSelectedYoutube(video)}
+                      className={`w-full text-left rounded-lg overflow-hidden border bg-black/20 ${
+                        selectedYoutube?.id === video.id
+                          ? 'border-red-500/70 ring-1 ring-red-500/30'
+                          : 'border-white/8 hover:border-red-500/40'
+                      }`}
+                    >
+                      <div className="relative">
+                        <img
+                          src={video.thumbnailUrl}
+                          alt=""
+                          className="w-full h-32 object-cover"
+                        />
+                        {selectedYoutube?.id === video.id && (
+                          <span className="absolute top-2 right-2 h-6 w-6 rounded-full bg-red-600 flex items-center justify-center">
+                            <Check className="h-3.5 w-3.5" />
+                          </span>
+                        )}
+                      </div>
+                      <div className="p-2.5">
+                        <div className="text-[10px] text-slate-200 line-clamp-2">
+                          {video.title}
+                        </div>
+                        <div className="text-[9px] text-slate-600 mt-1">
+                          {video.channelTitle}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+
+                {hasSearched && results.length === 0 && !searchError && (
+                  <div className="text-center text-xs text-slate-600 mt-10">
+                    No results for “{searchQuery}”. Try a broader phrase.
+                  </div>
+                )}
+                {!hasSearched && (
+                  <div className="text-center text-[11px] text-slate-600 mt-8 px-4">
+                    Search for media using the scene keywords above.
+                  </div>
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
-
-      <div className="border-t border-white/5 bg-[#0e1016] p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="text-xs font-medium text-slate-300 flex items-center gap-2">
-            <Captions className="h-3.5 w-3.5 text-sky-400" />
-            Auto subtitles
-          </h4>
-          <button
-            onClick={() => updateSubtitleSettings({ enabled: !subtitleSettings.enabled })}
-            className={`h-5 w-9 rounded-full p-0.5 transition-colors ${
-              subtitleSettings.enabled ? 'bg-violet-600' : 'bg-slate-700'
-            }`}
-          >
-            <span
-              className={`block h-4 w-4 rounded-full bg-white transition-transform ${
-                subtitleSettings.enabled ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[10px] text-slate-600">Size</label>
-            <input
-              type="range"
-              min="28"
-              max="72"
-              value={subtitleSettings.fontSize}
-              onChange={(event) => updateSubtitleSettings({ fontSize: Number(event.target.value) })}
-              className="w-full accent-violet-500"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-600 block mb-1">Position</label>
-            <select
-              value={subtitleSettings.position}
-              onChange={(event) =>
-                updateSubtitleSettings({ position: event.target.value as 'bottom' | 'center' })
-              }
-              className="w-full bg-[#090b10] border border-white/10 rounded p-1 text-[10px]"
-            >
-              <option value="bottom">Bottom</option>
-              <option value="center">Center</option>
-            </select>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
+  )
+}
+
+function SceneProperties({
+  scene,
+  videoTracks,
+  updateScene,
+  activeSubtitle,
+  setActiveSubtitleId,
+  updateSubtitle,
+  handleSubtitleKeyDown,
+}: {
+  scene: ReturnType<typeof useEditorStore.getState>['scenes'][number]
+  videoTracks: ReturnType<typeof useEditorStore.getState>['videoTracks']
+  updateScene: ReturnType<typeof useEditorStore.getState>['updateScene']
+  activeSubtitle: ReturnType<typeof useEditorStore.getState>['subtitles'][number] | undefined
+  setActiveSubtitleId: ReturnType<typeof useEditorStore.getState>['setActiveSubtitleId']
+  updateSubtitle: ReturnType<typeof useEditorStore.getState>['updateSubtitle']
+  handleSubtitleKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
+}) {
+  return (
+    <div className="space-y-5">
+      <section>
+        <h4 className="text-[10px] uppercase tracking-wider text-slate-500 mb-3">
+          Visual segment
+        </h4>
+        <div className="grid grid-cols-2 gap-2">
+          <NumberProperty
+            label="Start (seconds)"
+            value={scene.startTimeSec}
+            minimum={0}
+            onChange={(startTimeSec) =>
+              updateScene(scene.id, {
+                startTimeSec,
+                endTimeSec: startTimeSec + scene.durationSec,
+              })
+            }
+          />
+          <NumberProperty
+            label="Duration (seconds)"
+            value={scene.durationSec}
+            minimum={0.2}
+            onChange={(durationSec) =>
+              updateScene(scene.id, {
+                durationSec,
+                endTimeSec: scene.startTimeSec + durationSec,
+              })
+            }
+          />
+        </div>
+        <label className="block mt-3 text-[9px] text-slate-500">
+          Video track
+          <select
+            value={scene.trackId}
+            onChange={(event) => updateScene(scene.id, { trackId: event.target.value })}
+            className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-2 text-[10px] text-white"
+          >
+            {videoTracks.map((track, index) => (
+              <option key={track.id} value={track.id}>
+                {index === 0 ? 'Main video' : track.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+      <section className="space-y-3">
+        <h4 className="text-[10px] uppercase tracking-wider text-slate-500">
+          Transform & audio
+        </h4>
+        <PropertySlider
+          label="Volume"
+          value={scene.volume}
+          minimum={0}
+          maximum={1}
+          step={0.05}
+          display={`${Math.round(scene.volume * 100)}%`}
+          onChange={(volume) => updateScene(scene.id, { volume })}
+        />
+        <PropertySlider
+          label="Scale"
+          value={scene.scale}
+          minimum={0.25}
+          maximum={2}
+          step={0.05}
+          display={`${Math.round(scene.scale * 100)}%`}
+          onChange={(scale) => updateScene(scene.id, { scale })}
+        />
+        <PropertySlider
+          label="Opacity"
+          value={scene.opacity}
+          minimum={0}
+          maximum={1}
+          step={0.05}
+          display={`${Math.round(scene.opacity * 100)}%`}
+          onChange={(opacity) => updateScene(scene.id, { opacity })}
+        />
+      </section>
+      <section>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-slate-500">
+            Subtitle segment
+          </label>
+          <span className="text-[9px] text-slate-600">
+            Enter splits · Shift+Enter adds line
+          </span>
+        </div>
+        <textarea
+          value={activeSubtitle?.text || ''}
+          onFocus={() => activeSubtitle && setActiveSubtitleId(activeSubtitle.id)}
+          onChange={(event) =>
+            activeSubtitle && updateSubtitle(activeSubtitle.id, event.target.value)
+          }
+          onKeyDown={handleSubtitleKeyDown}
+          className="w-full h-24 resize-none text-xs text-slate-300 bg-[#090b10] p-2.5 rounded-lg border border-white/10 focus:border-violet-500/50 outline-none"
+          placeholder="No subtitle at this scene"
+        />
+      </section>
+    </div>
+  )
+}
+
+function SubtitleSettingsPanel({
+  settings,
+  updateSettings,
+}: {
+  settings: ReturnType<typeof useEditorStore.getState>['subtitleSettings']
+  updateSettings: ReturnType<typeof useEditorStore.getState>['updateSubtitleSettings']
+}) {
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-5">
+      <ToggleRow
+        label="Show subtitles"
+        enabled={settings.enabled}
+        onChange={(enabled) => updateSettings({ enabled })}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <ColorProperty
+          label="Text color"
+          value={settings.textColor}
+          onChange={(textColor) => updateSettings({ textColor })}
+        />
+        <label className="text-[9px] text-slate-500">
+          Position
+          <select
+            value={settings.position}
+            onChange={(event) =>
+              updateSettings({ position: event.target.value as 'bottom' | 'center' })
+            }
+            className="mt-1 w-full h-8 bg-[#090b10] border border-white/10 rounded px-2 text-[10px]"
+          >
+            <option value="bottom">Bottom</option>
+            <option value="center">Center</option>
+          </select>
+        </label>
+      </div>
+      <PropertySlider
+        label="Font size"
+        value={settings.fontSize}
+        minimum={24}
+        maximum={96}
+        step={1}
+        display={`${settings.fontSize}px`}
+        onChange={(fontSize) => updateSettings({ fontSize })}
+      />
+      <label className="block text-[9px] text-slate-500">
+        Font family
+        <select
+          value={settings.fontFamily}
+          onChange={(event) => updateSettings({ fontFamily: event.target.value })}
+          className="mt-1 w-full h-8 bg-[#090b10] border border-white/10 rounded px-2 text-[10px]"
+        >
+          <option value="Inter, Arial, sans-serif">Inter</option>
+          <option value="Arial, sans-serif">Arial</option>
+          <option value="Georgia, serif">Georgia</option>
+          <option value="'Trebuchet MS', sans-serif">Trebuchet</option>
+          <option value="'Courier New', monospace">Courier</option>
+        </select>
+      </label>
+      <PropertySlider
+        label="Font weight"
+        value={settings.fontWeight}
+        minimum={400}
+        maximum={900}
+        step={100}
+        display={String(settings.fontWeight)}
+        onChange={(fontWeight) => updateSettings({ fontWeight })}
+      />
+
+      <section className="border-t border-white/5 pt-4 space-y-3">
+        <ToggleRow
+          label="Subtitle background"
+          enabled={settings.backgroundEnabled}
+          onChange={(backgroundEnabled) => updateSettings({ backgroundEnabled })}
+        />
+        {settings.backgroundEnabled && (
+          <>
+            <ColorProperty
+              label="Background color"
+              value={settings.backgroundColor}
+              onChange={(backgroundColor) => updateSettings({ backgroundColor })}
+            />
+            <PropertySlider
+              label="Background opacity"
+              value={settings.backgroundOpacity}
+              minimum={0}
+              maximum={1}
+              step={0.05}
+              display={`${Math.round(settings.backgroundOpacity * 100)}%`}
+              onChange={(backgroundOpacity) => updateSettings({ backgroundOpacity })}
+            />
+          </>
+        )}
+      </section>
+
+      <section className="border-t border-white/5 pt-4 space-y-3">
+        <ToggleRow
+          label="Text outline"
+          enabled={settings.outlineEnabled}
+          onChange={(outlineEnabled) => updateSettings({ outlineEnabled })}
+        />
+        {settings.outlineEnabled && (
+          <>
+            <ColorProperty
+              label="Outline color"
+              value={settings.outlineColor}
+              onChange={(outlineColor) => updateSettings({ outlineColor })}
+            />
+            <PropertySlider
+              label="Outline width"
+              value={settings.outlineWidth}
+              minimum={1}
+              maximum={8}
+              step={1}
+              display={`${settings.outlineWidth}px`}
+              onChange={(outlineWidth) => updateSettings({ outlineWidth })}
+            />
+          </>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function ImageResult({
+  image,
+  onUse,
+}: {
+  image: ImageSearchResult
+  onUse: (image: ImageSearchResult) => void
+}) {
+  return (
+    <button
+      onClick={() => onUse(image)}
+      className="relative group w-full text-left rounded-lg overflow-hidden border border-white/8 hover:border-violet-500/50 bg-black/20"
+    >
+      <img
+        src={image.thumbnailUrl}
+        alt={image.title}
+        className="w-full h-36 object-cover"
+        loading="lazy"
+      />
+      <div className="p-2">
+        <div className="text-[10px] text-slate-300 truncate">{image.title}</div>
+        <div className="text-[9px] text-slate-600 capitalize mt-0.5">{image.source}</div>
+      </div>
+      <span className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-violet-600 rounded px-2 py-1 text-[9px]">
+        Use image
+      </span>
+    </button>
+  )
+}
+
+function EmptyInspector({ text }: { text: string }) {
+  return (
+    <div className="flex-1 flex items-center justify-center text-slate-500 p-8 text-center text-sm">
+      {text}
+    </div>
+  )
+}
+
+function tabLabel(tab: SearchTab) {
+  if (tab === 'google') return 'Google Images'
+  if (tab === 'pexels-image') return 'Pexels Images'
+  if (tab === 'pexels-video') return 'Pexels Video'
+  return 'YouTube'
+}
+
+function NumberProperty({
+  label,
+  value,
+  minimum,
+  onChange,
+}: {
+  label: string
+  value: number
+  minimum: number
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="text-[9px] text-slate-500">
+      {label}
+      <input
+        type="number"
+        min={minimum}
+        step="0.1"
+        value={Number(value.toFixed(2))}
+        onChange={(event) => onChange(Math.max(minimum, Number(event.target.value)))}
+        className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-2 text-[10px] text-white"
+      />
+    </label>
+  )
+}
+
+function ToggleRow({
+  label,
+  enabled,
+  onChange,
+}: {
+  label: string
+  enabled: boolean
+  onChange: (enabled: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] text-slate-300">{label}</span>
+      <button
+        onClick={() => onChange(!enabled)}
+        className={`h-5 w-9 rounded-full p-0.5 transition-colors ${
+          enabled ? 'bg-violet-600' : 'bg-slate-700'
+        }`}
+      >
+        <span
+          className={`block h-4 w-4 rounded-full bg-white transition-transform ${
+            enabled ? 'translate-x-4' : ''
+          }`}
+        />
+      </button>
+    </div>
+  )
+}
+
+function ColorProperty({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="text-[9px] text-slate-500">
+      {label}
+      <div className="mt-1 h-8 flex items-center gap-2 rounded border border-white/10 bg-[#090b10] px-2">
+        <input
+          type="color"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-5 w-6 bg-transparent border-0"
+        />
+        <span className="text-[9px] text-slate-400 uppercase">{value}</span>
+      </div>
+    </label>
+  )
+}
+
+function PropertySlider({
+  label,
+  value,
+  minimum,
+  maximum,
+  step,
+  display,
+  onChange,
+}: {
+  label: string
+  value: number
+  minimum: number
+  maximum: number
+  step: number
+  display: string
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="block text-[9px] text-slate-500">
+      <span className="flex justify-between mb-1">
+        <span>{label}</span>
+        <span className="text-slate-400">{display}</span>
+      </span>
+      <input
+        type="range"
+        min={minimum}
+        max={maximum}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full accent-violet-500"
+      />
+    </label>
   )
 }

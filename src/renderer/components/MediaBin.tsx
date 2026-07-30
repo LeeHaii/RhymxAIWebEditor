@@ -21,7 +21,7 @@ function fileUrl(filePath: string) {
   return encodeURI(`file:///${filePath.replace(/\\/g, '/')}`)
 }
 
-export default function MediaBin() {
+export default function MediaBin({ width = 256 }: { width?: number }) {
   const {
     mediaLibrary,
     activeSceneId,
@@ -90,7 +90,8 @@ export default function MediaBin() {
       }}
       onDragLeave={() => setIsDragging(false)}
       onDrop={onDrop}
-      className={`w-64 shrink-0 bg-[#111319] border-r border-white/5 flex flex-col ${
+      style={{ width }}
+      className={`shrink-0 bg-[#111319] flex flex-col min-w-0 ${
         isDragging ? 'ring-2 ring-inset ring-violet-500' : ''
       }`}
     >
@@ -135,7 +136,19 @@ export default function MediaBin() {
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {visibleAssets.map((asset) => (
-              <div key={asset.id} className="group rounded-lg border border-white/5 bg-black/20 overflow-hidden">
+              <div
+                key={asset.id}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'copy'
+                  event.dataTransfer.setData(
+                    'application/x-rhymx-media',
+                    JSON.stringify(asset)
+                  )
+                }}
+                className="group rounded-lg border border-white/5 bg-black/20 overflow-hidden cursor-grab active:cursor-grabbing"
+                title="Drag this media onto a timeline track"
+              >
                 <button
                   onClick={() => {
                     if (asset.kind === 'video' || asset.kind === 'image') placeVisual(asset)
@@ -193,7 +206,7 @@ export default function MediaBin() {
 
       <div className="border-t border-white/5 p-3 text-[10px] text-slate-600 flex items-center gap-2">
         <Film className="h-3 w-3" />
-        Select a scene, then click visual media
+        Drag media to a track, or click to replace selected media
       </div>
     </aside>
   )

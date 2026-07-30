@@ -4,6 +4,9 @@
   "description": "AI Video Editor",
   "main": "dist-electron/main.js",
   "build": {
+    "directories": {
+      "output": "release"
+    },
     "win": {
       "signAndEditExecutable": false
     }

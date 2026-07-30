@@ -2,10 +2,12 @@ import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import path from 'path'
 import { transcribeAudio } from './services/gemini'
 import { trimYouTube } from './services/sidecar'
-import { searchImages } from './services/imageSearch'
-import { exportVideo } from './services/export'
+import { searchGoogleImages, searchImages } from './services/imageSearch'
+import { searchYouTube } from './services/youtubeSearch'
+import { cancelActiveExport, exportVideo } from './services/export'
+import { getEncoderCapabilities } from './services/hardware'
 import fs from 'fs/promises'
-import { ProjectDocument } from '../types/editor'
+import { ExportVideoRequest, ProjectDocument } from '../types/editor'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -36,7 +38,7 @@ async function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    mainWindow.loadFile(path.join(__dirname, '../dist-renderer/index.html'))
   }
 }
 
@@ -161,18 +163,37 @@ ipcMain.handle('trim-youtube', async (_, url: string, startTime: number, endTime
   return await trimYouTube(url, startTime, endTime)
 })
 
-ipcMain.handle('search-images', async (_, query: string) => {
-  return await searchImages(query)
+ipcMain.handle('search-images', async (_, query: string, pexelsKey?: string) => {
+  return await searchImages(query, pexelsKey)
 })
 
-ipcMain.handle('export-video', async (
-  event,
-  scenes: any[],
-  audioPath: string,
-  audioClips = [],
-  subtitleSettings
-) => {
-  return await exportVideo(scenes, audioPath, audioClips, subtitleSettings, (progress) => {
+ipcMain.handle(
+  'search-google-images',
+  async (_, query: string, apiKey: string, searchEngineId: string) => {
+    return await searchGoogleImages(query, apiKey, searchEngineId)
+  }
+)
+
+ipcMain.handle('search-youtube', async (_, query: string, apiKey: string) => {
+  return await searchYouTube(query, apiKey)
+})
+
+ipcMain.handle('choose-export-path', async (_, defaultName: string) => {
+  if (!mainWindow) return null
+  const safeName = `${path.basename(defaultName || 'AI Video', path.extname(defaultName || ''))}.mp4`
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export video',
+    defaultPath: path.join(app.getPath('videos'), safeName),
+    filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
+  })
+  return result.canceled ? null : result.filePath || null
+})
+
+ipcMain.handle('get-encoder-capabilities', () => getEncoderCapabilities())
+ipcMain.handle('cancel-export', () => cancelActiveExport())
+
+ipcMain.handle('export-video', async (_, request: ExportVideoRequest) => {
+  return await exportVideo(request, (progress) => {
     if (mainWindow) {
       mainWindow.webContents.send('export-progress', progress)
     }
@@ -213,3 +234,11 @@ ipcMain.handle('get-pexels-key', () => getSecret('pexels'))
 ipcMain.handle('set-pexels-key', (_, key: string) => setSecret('pexels', key))
 ipcMain.handle('get-gemini-key', () => getSecret('gemini'))
 ipcMain.handle('set-gemini-key', (_, key: string) => setSecret('gemini', key))
+ipcMain.handle('get-youtube-key', () => getSecret('youtube'))
+ipcMain.handle('set-youtube-key', (_, key: string) => setSecret('youtube', key))
+ipcMain.handle('get-google-search-key', () => getSecret('googleSearch'))
+ipcMain.handle('set-google-search-key', (_, key: string) => setSecret('googleSearch', key))
+ipcMain.handle('get-google-search-cx', () => getSecret('googleSearchCx'))
+ipcMain.handle('set-google-search-cx', (_, value: string) =>
+  setSecret('googleSearchCx', value)
+)
