@@ -23,8 +23,7 @@ export default defineConfig({
                 '@remotion/renderer', 
                 '@remotion/compositor-win32-x64-msvc',
                 'remotion', 
-                '@rspack/binding',
-                '@google/genai'
+                '@rspack/binding'
               ],
             },
           },

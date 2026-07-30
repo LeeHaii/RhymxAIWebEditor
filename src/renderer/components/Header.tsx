@@ -35,11 +35,11 @@ export default function Header() {
   }
 
   const updateKey = (
-    key: 'gemini' | 'pexels' | 'youtube',
+    key: 'groq' | 'pexels' | 'youtube',
     value: string
   ) => {
     setApiKeys({ [key]: value })
-    if (key === 'gemini') window.electronAPI.setGeminiKey(value)
+    if (key === 'groq') window.electronAPI.setGroqKey(value)
     else if (key === 'pexels') window.electronAPI.setPexelsKey(value)
     else window.electronAPI.setYouTubeKey(value)
   }
@@ -122,13 +122,13 @@ export default function Header() {
           <h2 className="font-semibold text-sm text-slate-200 mb-4">API settings</h2>
           <div className="space-y-4">
             <label className="block">
-              <span className="block text-[11px] text-slate-500 mb-1.5">Gemini API key</span>
+              <span className="block text-[11px] text-slate-500 mb-1.5">Groq API key</span>
               <input
                 type="password"
                 className="w-full bg-[#0d0f14] border border-white/10 focus:border-violet-500/50 outline-none rounded-lg p-2.5 text-xs text-slate-300"
-                value={apiKeys.gemini}
-                onChange={(event) => updateKey('gemini', event.target.value)}
-                placeholder="AQ.…"
+                value={apiKeys.groq}
+                onChange={(event) => updateKey('groq', event.target.value)}
+                placeholder="gsk_…"
               />
             </label>
             <label className="block">
@@ -174,6 +174,8 @@ export default function Header() {
               ['Redo', 'Ctrl+Shift+Z'],
               ['Move playhead 1 frame', '← / →'],
               ['Move playhead 1 second', 'Shift+← / →'],
+              ['Zoom timeline in / out', 'Ctrl++ / Ctrl+-'],
+              ['Reset timeline zoom', 'Ctrl+0'],
               ['Save project', 'Ctrl+S'],
               ['Split subtitle at cursor', 'Enter'],
               ['Subtitle line break', 'Shift+Enter'],

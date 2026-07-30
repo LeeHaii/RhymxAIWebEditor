@@ -5,6 +5,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openMediaFiles: () => ipcRenderer.invoke('open-media-files'),
   getMediaDuration: (filePath: string) => ipcRenderer.invoke('get-media-duration', filePath),
   transcribeAudio: (filePath: string, apiKey: string) => ipcRenderer.invoke('transcribe-audio', filePath, apiKey),
+  onTranscriptionProgress: (callback: (progress: any) => void) => {
+    ipcRenderer.removeAllListeners('transcription-progress')
+    ipcRenderer.on('transcription-progress', (_event, value) => callback(value))
+  },
   autoMatchPexelsVideos: (scenes: any[], apiKey: string) =>
     ipcRenderer.invoke('auto-match-pexels-videos', scenes, apiKey),
   onPexelsAutoMatchProgress: (callback: (progress: any) => void) => {
@@ -14,6 +18,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listProjects: () => ipcRenderer.invoke('list-projects'),
   loadProject: (projectId: string) => ipcRenderer.invoke('load-project', projectId),
   saveProject: (project: any) => ipcRenderer.invoke('save-project', project),
+  renameProject: (projectId: string, name: string) =>
+    ipcRenderer.invoke('rename-project', projectId, name),
+  duplicateProject: (projectId: string) =>
+    ipcRenderer.invoke('duplicate-project', projectId),
+  deleteProject: (projectId: string) =>
+    ipcRenderer.invoke('delete-project', projectId),
   getAppSettings: () => ipcRenderer.invoke('get-app-settings'),
   chooseProjectsDirectory: () => ipcRenderer.invoke('choose-projects-directory'),
   resetProjectsDirectory: () => ipcRenderer.invoke('reset-projects-directory'),
@@ -21,6 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('set-auto-stock-enabled', enabled),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
   trimYouTube: (url: string, startTime: number, endTime: number) => ipcRenderer.invoke('trim-youtube', url, startTime, endTime),
+  onYouTubeTrimProgress: (callback: (progress: number) => void) => {
+    ipcRenderer.removeAllListeners('youtube-trim-progress')
+    ipcRenderer.on('youtube-trim-progress', (_event, value) => callback(value))
+  },
   searchImages: (query: string, pexelsKey?: string) =>
     ipcRenderer.invoke('search-images', query, pexelsKey),
   searchDuckDuckGoImages: (query: string) =>
@@ -47,8 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getPexelsKey: () => ipcRenderer.invoke('get-pexels-key'),
   setPexelsKey: (key: string) => ipcRenderer.invoke('set-pexels-key', key),
-  getGeminiKey: () => ipcRenderer.invoke('get-gemini-key'),
-  setGeminiKey: (key: string) => ipcRenderer.invoke('set-gemini-key', key),
+  getGroqKey: () => ipcRenderer.invoke('get-groq-key'),
+  setGroqKey: (key: string) => ipcRenderer.invoke('set-groq-key', key),
   getYouTubeKey: () => ipcRenderer.invoke('get-youtube-key'),
   setYouTubeKey: (key: string) => ipcRenderer.invoke('set-youtube-key', key),
 })

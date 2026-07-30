@@ -1,4 +1,4 @@
-import React, { PointerEvent, useMemo, useRef, useState } from 'react'
+import React, { PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Captions,
   Eye,
@@ -70,11 +70,33 @@ export default function Timeline() {
     trimAudioClip,
   } = useEditorStore()
   const trackRef = useRef<HTMLDivElement>(null)
-  const [zoom, setZoom] = useState(100)
+  const [zoom, setZoom] = useState(() => {
+    const savedZoom = Number(localStorage.getItem('rhymx.timelineZoom') || 100)
+    return Number.isFinite(savedZoom) ? clamp(savedZoom, 100, 2000) : 100
+  })
   const [snapEnabled, setSnapEnabled] = useState(
     () => localStorage.getItem('rhymx.timelineSnap') !== 'false'
   )
   const [snapGuideSec, setSnapGuideSec] = useState<number | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem('rhymx.timelineZoom', String(zoom))
+  }, [zoom])
+
+  useEffect(() => {
+    const onTimelineZoom = (event: Event) => {
+      const action = (
+        event as CustomEvent<{ action?: 'in' | 'out' | 'reset' }>
+      ).detail?.action
+      setZoom((value) =>
+        action === 'reset'
+          ? 100
+          : clamp(value + (action === 'out' ? -50 : 50), 100, 2000)
+      )
+    }
+    window.addEventListener('rhymx:timeline-zoom', onTimelineZoom)
+    return () => window.removeEventListener('rhymx:timeline-zoom', onTimelineZoom)
+  }, [])
 
   const totalDuration = useMemo(() => {
     const sceneEnd = scenes.reduce((max, scene) => Math.max(max, scene.endTimeSec), 0)
@@ -478,7 +500,16 @@ export default function Timeline() {
     currentTimeSec < (activeScene?.endTimeSec || 0) - 0.2
 
   return (
-    <div className="w-full h-full flex flex-col select-none">
+    <div
+      className="w-full h-full flex flex-col select-none"
+      onWheel={(event) => {
+        if (!(event.ctrlKey || event.metaKey)) return
+        event.preventDefault()
+        setZoom((value) =>
+          clamp(value + (event.deltaY > 0 ? -50 : 50), 100, 2000)
+        )
+      }}
+    >
       <div className="h-11 shrink-0 border-b border-white/5 flex items-center justify-between px-3">
         <div className="flex items-center gap-1">
           <button
@@ -532,7 +563,7 @@ export default function Timeline() {
             <button
               onClick={() => setZoom((value) => Math.max(100, value - 50))}
               className="p-1 text-slate-500 hover:text-white"
-              title="Zoom timeline out"
+              title="Zoom timeline out (Ctrl+-)"
             >
               <Minus className="h-3 w-3" />
             </button>
@@ -548,7 +579,7 @@ export default function Timeline() {
             <button
               onClick={() => setZoom((value) => Math.min(2000, value + 50))}
               className="p-1 text-slate-500 hover:text-white"
-              title="Zoom timeline in"
+              title="Zoom timeline in (Ctrl++)"
             >
               <Plus className="h-3 w-3" />
             </button>

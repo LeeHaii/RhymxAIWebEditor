@@ -19,6 +19,7 @@ export async function searchYouTube(
         maxResults: 12,
         safeSearch: 'moderate',
         videoEmbeddable: true,
+        videoSyndicated: true,
         key: apiKey.trim(),
       },
       timeout: 15000,

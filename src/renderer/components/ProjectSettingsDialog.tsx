@@ -19,9 +19,9 @@ export default function ProjectSettingsDialog({
     window.electronAPI.getAppSettings().then(setSettings)
   }, [])
 
-  const updateKey = (key: 'gemini' | 'pexels' | 'youtube', value: string) => {
+  const updateKey = (key: 'groq' | 'pexels' | 'youtube', value: string) => {
     setApiKeys({ [key]: value })
-    if (key === 'gemini') window.electronAPI.setGeminiKey(value)
+    if (key === 'groq') window.electronAPI.setGroqKey(value)
     else if (key === 'pexels') window.electronAPI.setPexelsKey(value)
     else window.electronAPI.setYouTubeKey(value)
   }
@@ -127,7 +127,7 @@ export default function ProjectSettingsDialog({
                   Auto-fill new scenes with Pexels video
                 </div>
                 <div className="text-[9px] text-slate-600 mt-1">
-                  Uses Gemini’s recommended keywords after transcription.
+                  Uses Groq’s recommended keywords after transcription.
                 </div>
               </div>
               <input
@@ -151,7 +151,7 @@ export default function ProjectSettingsDialog({
             <div className="grid grid-cols-1 gap-3">
               {(
                 [
-                  ['gemini', 'Gemini API key', 'Required for transcription'],
+                  ['groq', 'Groq API key', 'Required for Whisper transcription'],
                   ['pexels', 'Pexels API key', 'Required for automatic stock footage'],
                   ['youtube', 'YouTube Data API key', 'Required only for YouTube search'],
                 ] as const

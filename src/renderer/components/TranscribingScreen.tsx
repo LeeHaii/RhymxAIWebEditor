@@ -63,8 +63,27 @@ export default function TranscribingScreen() {
             ) : (
               <Check className="h-4 w-4 text-emerald-400" />
             )}
-            Transcribing speech and detecting scenes
+            <span className="flex-1">
+              Transcribing speech and checking for omissions
+              {processingStage === 'transcribing' && processingProgress.message && (
+                <span className="block text-[10px] text-slate-500 mt-0.5">
+                  {processingProgress.message}
+                </span>
+              )}
+            </span>
           </div>
+          {processingStage === 'transcribing' && processingProgress.total > 0 && (
+            <div className="h-1.5 rounded-full bg-black/30 overflow-hidden">
+              <div
+                className="h-full bg-violet-500 transition-[width]"
+                style={{
+                  width: `${
+                    (processingProgress.completed / processingProgress.total) * 100
+                  }%`,
+                }}
+              />
+            </div>
+          )}
           <div
             className={`flex items-center gap-3 text-sm ${
               processingStage === 'transcribing' ? 'text-slate-600' : 'text-white'
@@ -112,7 +131,7 @@ export default function TranscribingScreen() {
             Creating synchronized subtitles and saving project
           </div>
         </div>
-        <p className="text-xs text-slate-600 mt-5">Keep this window open while Gemini processes the audio.</p>
+        <p className="text-xs text-slate-600 mt-5">Keep this window open while Groq Whisper processes the audio.</p>
       </div>
     </div>
   )

@@ -6,14 +6,18 @@ import {
   safeStorage,
   session,
 } from 'electron'
+import { createReadStream } from 'node:fs'
+import { createServer, Server } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import path from 'path'
 import { fileURLToPath } from 'node:url'
-import { transcribeAudio } from './services/gemini'
+import { transcribeAudio } from './services/groq'
 import { trimYouTube } from './services/sidecar'
 import { searchDuckDuckGoImages, searchImages } from './services/imageSearch'
 import { searchYouTube } from './services/youtubeSearch'
 import { getMediaDuration } from './services/mediaMetadata'
 import { autoMatchPexelsVideos } from './services/pexelsAutoMatch'
+import { repairProjectTranscriptTiming } from './services/transcriptTiming'
 import {
   registerLocalMediaProtocol,
   registerLocalMediaScheme,
@@ -31,6 +35,8 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 let batchExportCancelled = false
+let rendererServer: Server | null = null
+let rendererOriginPromise: Promise<string> | null = null
 
 registerLocalMediaScheme()
 
@@ -48,11 +54,15 @@ async function createWindow() {
 
   // Set CSP to allow local files and images
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== 'mainFrame') {
+      callback({ responseHeaders: details.responseHeaders })
+      return
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: file: rhymx-media: https: http: blob:;",
+          "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: rhymx-media: https:; media-src 'self' data: blob: file: rhymx-media: https:; connect-src 'self' https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com;",
         ]
       }
     })
@@ -61,8 +71,81 @@ async function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist-renderer/index.html'))
+    mainWindow.loadURL(await getRendererOrigin())
   }
+}
+
+function getRendererOrigin() {
+  if (rendererOriginPromise) return rendererOriginPromise
+  rendererOriginPromise = new Promise<string>((resolve, reject) => {
+    const rendererDirectory = path.resolve(__dirname, '../dist-renderer')
+    const server = createServer(async (request, response) => {
+      try {
+        const requestUrl = new URL(request.url || '/', 'http://127.0.0.1')
+        const relativePath =
+          requestUrl.pathname === '/'
+            ? 'index.html'
+            : decodeURIComponent(requestUrl.pathname).replace(/^\/+/, '')
+        const filePath = path.resolve(rendererDirectory, relativePath)
+        if (
+          filePath !== rendererDirectory &&
+          !filePath.startsWith(`${rendererDirectory}${path.sep}`)
+        ) {
+          response.writeHead(403)
+          response.end('Forbidden')
+          return
+        }
+        const stats = await fs.stat(filePath)
+        if (!stats.isFile()) throw new Error('Not a file')
+        response.writeHead(200, {
+          'Content-Type': rendererContentType(filePath),
+          'Content-Length': stats.size,
+          'Cache-Control': 'no-cache',
+        })
+        if (request.method === 'HEAD') {
+          response.end()
+        } else {
+          createReadStream(filePath).pipe(response)
+        }
+      } catch {
+        response.writeHead(404)
+        response.end('Not found')
+      }
+    })
+    server.once('error', (error) => {
+      rendererOriginPromise = null
+      reject(error)
+    })
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close()
+        rendererOriginPromise = null
+        reject(new Error('Could not start the renderer server.'))
+        return
+      }
+      rendererServer = server
+      resolve(`http://127.0.0.1:${address.port}`)
+    })
+  })
+  return rendererOriginPromise
+}
+
+function rendererContentType(filePath: string) {
+  const types: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+  }
+  return types[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
 }
 
 app.whenReady().then(() => {
@@ -75,6 +158,12 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  rendererServer?.close()
+  rendererServer = null
+  rendererOriginPromise = null
 })
 
 // --- IPC Handlers ---
@@ -96,7 +185,9 @@ ipcMain.handle('get-media-duration', async (_, filePath: string) => {
 })
 
 ipcMain.handle('transcribe-audio', async (_, filePath: string, apiKey: string) => {
-  return await transcribeAudio(filePath, apiKey)
+  return await transcribeAudio(filePath, apiKey, (progress) => {
+    mainWindow?.webContents.send('transcription-progress', progress)
+  })
 })
 
 ipcMain.handle(
@@ -185,6 +276,53 @@ async function getProjectPath(projectId: string) {
   return path.join(await getProjectsDirectory(), `${projectId}.json`)
 }
 
+function cleanProjectName(name: string) {
+  const cleaned = String(name || '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+  if (!cleaned) throw new Error('Project name cannot be empty.')
+  return cleaned
+}
+
+async function writeProjectDocument(project: ProjectDocument) {
+  const directory = await getProjectsDirectory()
+  await fs.mkdir(directory, { recursive: true })
+  const destination = await getProjectPath(project.id)
+  const temporary = `${destination}.tmp`
+  await fs.writeFile(temporary, JSON.stringify(project, null, 2), 'utf8')
+  await fs.rename(temporary, destination)
+}
+
+async function uniqueDuplicateName(sourceName: string) {
+  const directory = await getProjectsDirectory()
+  await fs.mkdir(directory, { recursive: true })
+  const existingNames = new Set<string>()
+  for (const file of await fs.readdir(directory)) {
+    if (!file.endsWith('.json')) continue
+    try {
+      const project = JSON.parse(
+        await fs.readFile(path.join(directory, file), 'utf8')
+      ) as ProjectDocument
+      existingNames.add(project.name.toLocaleLowerCase())
+    } catch {
+      // Unreadable projects are already ignored by the project list.
+    }
+  }
+  const copySuffix = ' copy'
+  const source = cleanProjectName(sourceName)
+  const baseName = `${source.slice(0, 120 - copySuffix.length)}${copySuffix}`
+  let name = baseName
+  let copyNumber = 2
+  while (existingNames.has(name.toLocaleLowerCase())) {
+    const suffix = ` (${copyNumber})`
+    name = `${baseName.slice(0, 120 - suffix.length)}${suffix}`
+    copyNumber += 1
+  }
+  return name
+}
+
 async function directorySize(directory: string): Promise<number> {
   try {
     const entries = await fs.readdir(directory, { withFileTypes: true })
@@ -247,6 +385,15 @@ ipcMain.handle('list-projects', async () => {
 async function loadProjectDocument(projectId: string) {
   const contents = await fs.readFile(await getProjectPath(projectId), 'utf8')
   const project = JSON.parse(contents) as ProjectDocument
+  if (project.audioFile?.path) {
+    const audioPath = project.audioFile.path.startsWith('file:')
+      ? fileURLToPath(project.audioFile.path)
+      : project.audioFile.path
+    const actualAudioDuration = await getMediaDuration(audioPath)
+    if (actualAudioDuration) {
+      repairProjectTranscriptTiming(project, actualAudioDuration)
+    }
+  }
   await Promise.all([
     ...(project.mediaLibrary || []).map(async (asset) => {
       if (asset.kind === 'image' || asset.durationSec) return
@@ -284,12 +431,37 @@ ipcMain.handle('load-project', async (_, projectId: string) => {
 })
 
 ipcMain.handle('save-project', async (_, project: ProjectDocument) => {
-  const directory = await getProjectsDirectory()
-  await fs.mkdir(directory, { recursive: true })
-  const destination = await getProjectPath(project.id)
-  const temporary = `${destination}.tmp`
-  await fs.writeFile(temporary, JSON.stringify(project, null, 2), 'utf8')
-  await fs.rename(temporary, destination)
+  await writeProjectDocument(project)
+})
+
+ipcMain.handle('rename-project', async (_, projectId: string, name: string) => {
+  const project = JSON.parse(
+    await fs.readFile(await getProjectPath(projectId), 'utf8')
+  ) as ProjectDocument
+  project.name = cleanProjectName(name)
+  project.updatedAt = new Date().toISOString()
+  await writeProjectDocument(project)
+})
+
+ipcMain.handle('duplicate-project', async (_, projectId: string) => {
+  const source = JSON.parse(
+    await fs.readFile(await getProjectPath(projectId), 'utf8')
+  ) as ProjectDocument
+  const now = new Date().toISOString()
+  const duplicate: ProjectDocument = {
+    ...source,
+    id: randomUUID(),
+    name: await uniqueDuplicateName(source.name),
+    createdAt: now,
+    updatedAt: now,
+  }
+  delete duplicate.timingRepair
+  await writeProjectDocument(duplicate)
+  return duplicate.id
+})
+
+ipcMain.handle('delete-project', async (_, projectId: string) => {
+  await fs.unlink(await getProjectPath(projectId))
 })
 
 ipcMain.handle('get-app-settings', () => appSettings())
@@ -336,8 +508,14 @@ ipcMain.handle('clear-cache', async () => {
   return await appSettings()
 })
 
-ipcMain.handle('trim-youtube', async (_, url: string, startTime: number, endTime: number) => {
-  return await trimYouTube(url, startTime, endTime, getAppCacheDirectory())
+ipcMain.handle('trim-youtube', async (event, url: string, startTime: number, endTime: number) => {
+  return await trimYouTube(
+    url,
+    startTime,
+    endTime,
+    getAppCacheDirectory(),
+    (progress) => event.sender.send('youtube-trim-progress', progress)
+  )
 })
 
 ipcMain.handle('search-images', async (_, query: string, pexelsKey?: string) => {
@@ -541,7 +719,7 @@ async function setSecret(name: string, value: string) {
 
 ipcMain.handle('get-pexels-key', () => getSecret('pexels'))
 ipcMain.handle('set-pexels-key', (_, key: string) => setSecret('pexels', key))
-ipcMain.handle('get-gemini-key', () => getSecret('gemini'))
-ipcMain.handle('set-gemini-key', (_, key: string) => setSecret('gemini', key))
+ipcMain.handle('get-groq-key', () => getSecret('groq'))
+ipcMain.handle('set-groq-key', (_, key: string) => setSecret('groq', key))
 ipcMain.handle('get-youtube-key', () => getSecret('youtube'))
 ipcMain.handle('set-youtube-key', (_, key: string) => setSecret('youtube', key))

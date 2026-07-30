@@ -1,4 +1,4 @@
-import React, { KeyboardEvent, useEffect, useState } from 'react'
+import React, { KeyboardEvent, useEffect, useRef, useState } from 'react'
 import {
   Captions,
   Check,
@@ -13,6 +13,12 @@ import {
 } from 'lucide-react'
 import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
 import { useEditorStore } from '../../../store/useEditorStore'
+import {
+  formatTimecode,
+  splitTimecode,
+  TimecodePart,
+  updateTimecodePart,
+} from '../../utils/timecode'
 
 type InspectorTab = 'properties' | 'media' | 'subtitles'
 type SearchTab = 'duckduckgo' | 'pexels-image' | 'pexels-video' | 'youtube'
@@ -47,6 +53,9 @@ export default function ContextInspector() {
   const [selectedPexels, setSelectedPexels] = useState<any | null>(null)
   const [ytStart, setYtStart] = useState(0)
   const [isTrimming, setIsTrimming] = useState(false)
+  const [trimProgress, setTrimProgress] = useState<number | null>(null)
+  const [youtubePreviewTime, setYoutubePreviewTime] = useState<number | null>(null)
+  const youtubeFrameRef = useRef<HTMLIFrameElement>(null)
 
   const activeScene = scenes.find((scene) => scene.id === activeSceneId)
   const activeAudioClip = audioClips.find((clip) => clip.id === activeAudioClipId)
@@ -68,7 +77,65 @@ export default function ContextInspector() {
     setSelectedYoutube(null)
     setSelectedPexels(null)
     setYtStart(0)
+    setTrimProgress(null)
+    setYoutubePreviewTime(null)
   }, [activeScene?.id])
+
+  useEffect(() => {
+    window.electronAPI.onYouTubeTrimProgress((progress) => {
+      setTrimProgress(Math.max(0, Math.min(100, progress)))
+    })
+  }, [])
+
+  useEffect(() => {
+    setTrimProgress(null)
+    setYoutubePreviewTime(null)
+    if (!selectedYoutube) return
+
+    const requestCurrentTime = () => {
+      const target = youtubeFrameRef.current?.contentWindow
+      if (!target) return
+      target.postMessage(
+        JSON.stringify({ event: 'listening', id: 'rhymx-youtube-preview' }),
+        'https://www.youtube.com'
+      )
+      target.postMessage(
+        JSON.stringify({
+          event: 'command',
+          func: 'getCurrentTime',
+          args: [],
+          id: 'rhymx-youtube-preview',
+        }),
+        'https://www.youtube.com'
+      )
+    }
+    const handleMessage = (event: MessageEvent) => {
+      if (
+        event.source !== youtubeFrameRef.current?.contentWindow ||
+        !/^https:\/\/www\.youtube(?:-nocookie)?\.com$/.test(event.origin)
+      ) {
+        return
+      }
+      try {
+        const data =
+          typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        const currentTime = Number(data?.info?.currentTime)
+        if (data?.event === 'infoDelivery' && Number.isFinite(currentTime)) {
+          setYoutubePreviewTime(Math.max(0, currentTime))
+        }
+      } catch {
+        // Ignore unrelated window messages.
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    const interval = window.setInterval(requestCurrentTime, 500)
+    requestCurrentTime()
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('message', handleMessage)
+    }
+  }, [selectedYoutube?.id])
 
   const handleSearch = async () => {
     const query = searchQuery.trim()
@@ -150,6 +217,7 @@ export default function ContextInspector() {
     const start = Math.max(0, ytStart)
     const end = start + activeScene.durationSec
     setIsTrimming(true)
+    setTrimProgress(0)
     setSearchError(null)
     try {
       const localPath = await window.electronAPI.trimYouTube(
@@ -167,12 +235,20 @@ export default function ContextInspector() {
         sourceDurationSec: activeScene.durationSec,
       })
     } catch (error) {
+      setTrimProgress(null)
       setSearchError(
         error instanceof Error ? error.message : 'Failed to download the YouTube clip.'
       )
     } finally {
       setIsTrimming(false)
     }
+  }
+
+  const setYoutubeTimestampPart = (
+    part: TimecodePart,
+    rawValue: string
+  ) => {
+    setYtStart(updateTimecodePart(ytStart, part, rawValue))
   }
 
   const handleSubtitleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -400,10 +476,12 @@ export default function ContextInspector() {
                 {activeTab === 'youtube' && selectedYoutube && (
                   <div className="rounded-lg border border-red-500/25 bg-red-500/[0.04] overflow-hidden">
                     <iframe
-                      src={`https://www.youtube-nocookie.com/embed/${selectedYoutube.id}`}
+                      ref={youtubeFrameRef}
+                      src={`https://www.youtube.com/embed/${selectedYoutube.id}?playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={selectedYoutube.title}
-                      className="w-full aspect-video bg-black"
+                      className="w-full h-[200px] bg-black"
                       allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
+                      referrerPolicy="strict-origin-when-cross-origin"
                       allowFullScreen
                     />
                     <div className="p-3">
@@ -411,18 +489,54 @@ export default function ContextInspector() {
                         <Crop className="w-3.5 h-3.5 text-red-400" />
                         Trim selected result
                       </h4>
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        <label className="text-[9px] text-slate-500">
+                      <div className="mb-3">
+                        <div className="text-[9px] text-slate-500 mb-1">
                           Start timestamp
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={ytStart}
-                            onChange={(event) => setYtStart(Number(event.target.value))}
-                            className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-1.5 text-[10px] text-white"
-                          />
-                        </label>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {(
+                            [
+                              ['hours', 'HH'],
+                              ['minutes', 'MM'],
+                              ['seconds', 'SS'],
+                            ] as const
+                          ).map(([part, label]) => {
+                            const timestamp = splitTimecode(ytStart)
+                            return (
+                              <label key={part} className="text-[8px] text-slate-600">
+                                {label}
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step={part === 'seconds' ? '0.01' : '1'}
+                                  inputMode="decimal"
+                                  value={timestamp[part]}
+                                  onChange={(event) =>
+                                    setYoutubeTimestampPart(part, event.target.value)
+                                  }
+                                  className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-1.5 text-center text-[10px] text-white"
+                                />
+                              </label>
+                            )
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            youtubePreviewTime !== null &&
+                            setYtStart(youtubePreviewTime)
+                          }
+                          disabled={youtubePreviewTime === null}
+                          className="mt-2 w-full rounded border border-white/10 bg-white/5 hover:bg-white/10 disabled:opacity-40 py-1.5 text-[9px] text-slate-300"
+                        >
+                          {youtubePreviewTime === null
+                            ? 'Play the preview to read its timestamp'
+                            : `Use current preview time · ${formatTimecode(
+                                youtubePreviewTime
+                              )}`}
+                        </button>
+                      </div>
+                      <div className="mb-3">
                         <div className="text-[9px] text-slate-500">
                           Segment duration
                           <div className="mt-1 rounded border border-white/10 bg-[#090b10] p-1.5 text-[10px] text-slate-300">
@@ -437,6 +551,28 @@ export default function ContextInspector() {
                       >
                         {isTrimming ? 'Downloading clip…' : 'Add clip to segment'}
                       </button>
+                      {trimProgress !== null && (
+                        <div className="mt-2">
+                          <div className="mb-1 flex items-center justify-between text-[8px] text-slate-500">
+                            <span>
+                              {trimProgress >= 100
+                                ? 'Clip downloaded'
+                                : 'Downloading and trimming'}
+                            </span>
+                            <span>{Math.round(trimProgress)}%</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+                            <div
+                              className={`h-full transition-[width] ${
+                                trimProgress >= 100
+                                  ? 'bg-emerald-500'
+                                  : 'bg-red-500'
+                              }`}
+                              style={{ width: `${trimProgress}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

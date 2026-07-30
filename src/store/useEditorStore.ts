@@ -151,6 +151,27 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
     }
   }))
 
+export function extendVisualScenesAcrossSpeechGaps(
+  scenes: SceneSegment[],
+  timelineDurationSec: number,
+  mainTrackId = scenes[0]?.trackId || 'track_main'
+) {
+  const output = scenes.map((scene) => ({ ...scene }))
+  const mainScenes = output
+    .filter((scene) => (scene.trackId || 'track_main') === mainTrackId)
+    .sort((first, second) => first.startTimeSec - second.startTimeSec)
+  for (let index = 0; index < mainScenes.length; index += 1) {
+    const scene = mainScenes[index]
+    const nextScene = mainScenes[index + 1]
+    const fillUntil = nextScene?.startTimeSec ?? timelineDurationSec
+    if (fillUntil > scene.endTimeSec + COLLISION_EPSILON) {
+      scene.endTimeSec = fillUntil
+      scene.durationSec = fillUntil - scene.startTimeSec
+    }
+  }
+  return output
+}
+
 const normalizeAudioClips = (clips?: TimelineAudioClip[]): TimelineAudioClip[] =>
   resolveAudioOverlaps((clips || []).map((clip) => {
     const sourceStartSec = clip.sourceStartSec ?? 0
@@ -199,14 +220,19 @@ interface EditorStore {
   currentTimeSec: number
   isPlaying: boolean
   apiKeys: {
-    gemini: string
+    groq: string
     pexels: string
     youtube: string
   }
   isProcessingAudio: boolean
   processingError: string | null
   processingStage: 'transcribing' | 'matching-stock' | 'saving'
-  processingProgress: { completed: number; total: number; matched: number }
+  processingProgress: {
+    completed: number
+    total: number
+    matched: number
+    message?: string
+  }
   editorNotice: string | null
   exportProgress: number | null
   seekTargetSec: number
@@ -222,7 +248,7 @@ interface EditorStore {
   closeProject: () => void
   setProjectName: (name: string) => void
   setAudioFile: (file: { path: string; duration: number } | null) => void
-  setScenes: (scenes: SceneSegment[]) => void
+  setScenes: (scenes: SceneSegment[], subtitleTimingScenes?: SceneSegment[]) => void
   updateScene: (id: string, updates: Partial<SceneSegment>) => void
   splitScene: (id: string, atTimeSec: number) => void
   trimScene: (
@@ -249,7 +275,7 @@ interface EditorStore {
   requestPlayback: (command?: 'play' | 'pause' | 'toggle') => void
   setIsPlaying: (playing: boolean) => void
   setApiKeys: (keys: {
-    gemini?: string
+    groq?: string
     pexels?: string
     youtube?: string
   }) => void
@@ -262,6 +288,7 @@ interface EditorStore {
     completed: number
     total: number
     matched: number
+    message?: string
   }) => void
   setEditorNotice: (notice: string | null) => void
   setExportProgress: (progress: number | null) => void
@@ -346,7 +373,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   currentTimeSec: 0,
   isPlaying: false,
   apiKeys: {
-    gemini: '',
+    groq: '',
     pexels: '',
     youtube: '',
   },
@@ -396,7 +423,18 @@ export const useEditorStore = create<EditorStore>((set) => ({
   },
   loadProject: (project) => {
     const videoTracks = normalizeVideoTracks(project.videoTracks)
-    const scenes = normalizeScenes(project.scenes, videoTracks[0].id)
+    const normalizedScenes = normalizeScenes(project.scenes, videoTracks[0].id)
+    const scenes = project.visualGapsFilled
+      ? normalizedScenes
+      : extendVisualScenesAcrossSpeechGaps(
+          normalizedScenes,
+          project.audioFile?.duration ||
+            normalizedScenes.reduce(
+              (maximum, scene) => Math.max(maximum, scene.endTimeSec),
+              0
+            ),
+          videoTracks[0].id
+        )
     const subtitles = project.subtitles?.length ? project.subtitles : subtitlesFromScenes(scenes)
     set({
       screen: 'editor',
@@ -425,7 +463,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
       currentTimeSec: 0,
       isPlaying: false,
       processingError: null,
-      editorNotice: null,
+      editorNotice: project.timingRepair
+        ? `Subtitle timing was repaired from ${project.timingRepair.previousTimelineDuration.toFixed(1)}s to match the ${project.timingRepair.actualAudioDuration.toFixed(1)}s voiceover.`
+        : null,
       history: [],
       future: [],
     })
@@ -460,21 +500,27 @@ export const useEditorStore = create<EditorStore>((set) => ({
   setProjectName: (projectName) => set({ projectName, projectUpdatedAt: markUpdated() }),
   setAudioFile: (audioFile) =>
     set((state) => historyChange(state, { audioFile })),
-  setScenes: (scenes) =>
+  setScenes: (scenes, subtitleTimingScenes) =>
     set((state) => {
       const videoTracks = state.videoTracks.length ? state.videoTracks : defaultVideoTracks()
       const normalizedScenes = normalizeScenes(scenes, videoTracks[0].id)
+      const normalizedSubtitleTimingScenes = subtitleTimingScenes
+        ? normalizeScenes(subtitleTimingScenes, videoTracks[0].id)
+        : normalizedScenes
       const duration = normalizedScenes.reduce(
         (max, scene) => Math.max(max, scene.endTimeSec),
         0
       )
-      const subtitles = subtitlesFromScenes(normalizedScenes)
+      const subtitles = subtitlesFromScenes(normalizedSubtitleTimingScenes)
       return historyChange(state, {
         scenes: normalizedScenes,
         videoTracks,
         subtitles,
         audioFile: state.audioFile
-          ? { ...state.audioFile, duration: Math.max(duration, state.audioFile.duration || 0) }
+          ? {
+              ...state.audioFile,
+              duration: state.audioFile.duration > 0 ? state.audioFile.duration : duration,
+            }
           : null,
         activeSceneId: normalizedScenes[0]?.id || null,
         activeSubtitleId: subtitles[0]?.id || null,
@@ -1127,5 +1173,6 @@ export function getProjectDocument(): ProjectDocument | null {
     mediaLibrary: state.mediaLibrary,
     audioClips: state.audioClips,
     subtitleSettings: state.subtitleSettings,
+    visualGapsFilled: true,
   }
 }

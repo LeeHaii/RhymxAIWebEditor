@@ -69,6 +69,22 @@ function EditorWorkspace() {
         if (project) window.electronAPI.saveProject(project)
         return
       }
+      if (commandKey && (key === '+' || key === '=' || key === '-' || key === '0')) {
+        event.preventDefault()
+        window.dispatchEvent(
+          new CustomEvent('rhymx:timeline-zoom', {
+            detail: {
+              action:
+                key === '-'
+                  ? 'out'
+                  : key === '0'
+                    ? 'reset'
+                    : 'in',
+            },
+          })
+        )
+        return
+      }
       if (isEditing) return
       if (commandKey && key === 'b') {
         event.preventDefault()
@@ -191,12 +207,12 @@ function App() {
 
   useEffect(() => {
     Promise.all([
-      window.electronAPI.getGeminiKey(),
+      window.electronAPI.getGroqKey(),
       window.electronAPI.getPexelsKey(),
       window.electronAPI.getYouTubeKey(),
-    ]).then(([gemini, pexels, youtube]) => {
+    ]).then(([groq, pexels, youtube]) => {
       setApiKeys({
-        gemini: gemini || '',
+        groq: groq || '',
         pexels: pexels || '',
         youtube: youtube || '',
       })

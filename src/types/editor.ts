@@ -107,6 +107,11 @@ export interface ProjectDocument {
   mediaLibrary: LibraryAsset[]
   audioClips: TimelineAudioClip[]
   subtitleSettings: SubtitleSettings
+  visualGapsFilled?: boolean
+  timingRepair?: {
+    previousTimelineDuration: number
+    actualAudioDuration: number
+  }
 }
 
 export interface ProjectSummary {
@@ -131,6 +136,13 @@ export interface PexelsAutoMatchProgress {
   matched: number
   sceneId?: string
   query?: string
+}
+
+export interface TranscriptionProgress {
+  stage: 'preparing' | 'transcribing' | 'keywords'
+  completed: number
+  total: number
+  message: string
 }
 
 export interface PexelsAutoMatchResult {
@@ -218,6 +230,9 @@ export interface ElectronAPI {
   openMediaFiles: () => Promise<ImportedFile[]>
   getMediaDuration: (filePath: string) => Promise<number | null>
   transcribeAudio: (filePath: string, apiKey: string) => Promise<SceneSegment[]>
+  onTranscriptionProgress: (
+    callback: (progress: TranscriptionProgress) => void
+  ) => void
   autoMatchPexelsVideos: (
     scenes: SceneSegment[],
     apiKey: string
@@ -228,12 +243,16 @@ export interface ElectronAPI {
   listProjects: () => Promise<ProjectSummary[]>
   loadProject: (projectId: string) => Promise<ProjectDocument>
   saveProject: (project: ProjectDocument) => Promise<void>
+  renameProject: (projectId: string, name: string) => Promise<void>
+  duplicateProject: (projectId: string) => Promise<string>
+  deleteProject: (projectId: string) => Promise<void>
   getAppSettings: () => Promise<AppSettings>
   chooseProjectsDirectory: () => Promise<AppSettings | null>
   resetProjectsDirectory: () => Promise<AppSettings>
   setAutoStockEnabled: (enabled: boolean) => Promise<AppSettings>
   clearCache: () => Promise<AppSettings>
   trimYouTube: (url: string, startTime: number, endTime: number) => Promise<string>
+  onYouTubeTrimProgress: (callback: (progress: number) => void) => void
   searchImages: (query: string, pexelsKey?: string) => Promise<ImageSearchResult[]>
   searchDuckDuckGoImages: (query: string) => Promise<ImageSearchResult[]>
   searchYouTube: (query: string, apiKey: string) => Promise<YouTubeSearchResult[]>
@@ -250,8 +269,8 @@ export interface ElectronAPI {
   ) => void
   getPexelsKey: () => Promise<string | null>
   setPexelsKey: (key: string) => Promise<void>
-  getGeminiKey: () => Promise<string | null>
-  setGeminiKey: (key: string) => Promise<void>
+  getGroqKey: () => Promise<string | null>
+  setGroqKey: (key: string) => Promise<void>
   getYouTubeKey: () => Promise<string | null>
   setYouTubeKey: (key: string) => Promise<void>
 }

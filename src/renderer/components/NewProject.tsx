@@ -1,6 +1,10 @@
 import React, { DragEvent, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, AudioLines, FileAudio, FolderOpen, KeyRound, Sparkles, Video } from 'lucide-react'
-import { getProjectDocument, useEditorStore } from '../../store/useEditorStore'
+import {
+  extendVisualScenesAcrossSpeechGaps,
+  getProjectDocument,
+  useEditorStore,
+} from '../../store/useEditorStore'
 
 type FileWithPath = File & { path?: string }
 
@@ -28,11 +32,20 @@ export default function NewProject() {
     window.electronAPI
       .getAppSettings()
       .then((settings) => setAutoStockEnabled(settings.autoStockEnabled))
+    window.electronAPI.onTranscriptionProgress((progress) => {
+      setProcessingProgress({
+        completed: progress.completed,
+        total: progress.total,
+        matched: 0,
+        message: progress.message,
+      })
+    })
     window.electronAPI.onPexelsAutoMatchProgress((progress) => {
       setProcessingProgress({
         completed: progress.completed,
         total: progress.total,
         matched: progress.matched,
+        message: 'Searching Pexels for each scene',
       })
     })
   }, [setProcessingProgress])
@@ -68,8 +81,8 @@ export default function NewProject() {
       alert('Choose a voiceover first.')
       return
     }
-    if (!apiKeys.gemini.trim()) {
-      alert('Enter a Gemini API key to transcribe your voiceover.')
+    if (!apiKeys.groq.trim()) {
+      alert('Enter a Groq API key to transcribe your voiceover.')
       return
     }
     if (autoStockEnabled && !apiKeys.pexels.trim()) {
@@ -77,25 +90,46 @@ export default function NewProject() {
       return
     }
 
-    await window.electronAPI.setGeminiKey(apiKeys.gemini.trim())
+    await window.electronAPI.setGroqKey(apiKeys.groq.trim())
     if (autoStockEnabled) {
       await window.electronAPI.setPexelsKey(apiKeys.pexels.trim())
     }
     beginProject(name, selectedAudio)
+    setProcessingProgress({
+      completed: 0,
+      total: 0,
+      matched: 0,
+      message: 'Analyzing voiceover',
+    })
 
     try {
-      const result = await window.electronAPI.transcribeAudio(selectedAudio.path, apiKeys.gemini)
-      let scenes = result.map((scene, index) => ({
+      const result = await window.electronAPI.transcribeAudio(selectedAudio.path, apiKeys.groq)
+      const subtitleTimingScenes = result.map((scene, index) => ({
         ...scene,
         id: scene.id || `scene_${index + 1}`,
         media: scene.media || null,
       }))
-      if (scenes.length === 0) {
-        throw new Error('Gemini returned an empty transcript.')
+      if (subtitleTimingScenes.length === 0) {
+        throw new Error('Groq Whisper returned an empty transcript.')
       }
+      const measuredDuration =
+        selectedAudio.duration ||
+        subtitleTimingScenes.reduce(
+          (maximum, scene) => Math.max(maximum, scene.endTimeSec),
+          0
+        )
+      let scenes = extendVisualScenesAcrossSpeechGaps(
+        subtitleTimingScenes,
+        measuredDuration
+      )
       if (autoStockEnabled) {
         setProcessingStage('matching-stock')
-        setProcessingProgress({ completed: 0, total: scenes.length, matched: 0 })
+        setProcessingProgress({
+          completed: 0,
+          total: scenes.length,
+          matched: 0,
+          message: 'Searching Pexels for each scene',
+        })
         try {
           const stockResult = await window.electronAPI.autoMatchPexelsVideos(
             scenes,
@@ -115,7 +149,7 @@ export default function NewProject() {
           )
         }
       }
-      setScenes(scenes)
+      setScenes(scenes, subtitleTimingScenes)
       setProcessingStage('saving')
       setIsProcessingAudio(false)
       setScreen('editor')
@@ -199,17 +233,17 @@ export default function NewProject() {
             <div className="mt-5">
               <label className="flex items-center gap-2 text-xs font-medium text-slate-400 mb-2">
                 <KeyRound className="h-3.5 w-3.5" />
-                Gemini API key
+                Groq API key
               </label>
               <input
                 type="password"
-                value={apiKeys.gemini}
-                onChange={(event) => setApiKeys({ gemini: event.target.value })}
-                placeholder="AQ.…"
+                value={apiKeys.groq}
+                onChange={(event) => setApiKeys({ groq: event.target.value })}
+                placeholder="gsk_…"
                 className="w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60"
               />
               <p className="text-[11px] text-slate-600 mt-2">
-                Stored by the desktop app and used only for Gemini transcription.
+                Encrypted by the desktop app and sent only to Groq for transcription and scene keywords.
               </p>
             </div>
 
@@ -222,7 +256,7 @@ export default function NewProject() {
                       Automatically add Pexels stock video
                     </div>
                     <div className="text-[10px] text-slate-600 mt-1">
-                      Matches each timed scene using Gemini’s recommended search keywords.
+                      Matches each timed scene using Groq’s recommended search keywords.
                     </div>
                   </div>
                 </div>
@@ -254,7 +288,7 @@ export default function NewProject() {
               onClick={createProject}
               disabled={
                 !selectedAudio ||
-                !apiKeys.gemini.trim() ||
+                !apiKeys.groq.trim() ||
                 (autoStockEnabled && !apiKeys.pexels.trim())
               }
               className="mt-6 w-full rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed py-3.5 text-sm font-medium flex items-center justify-center gap-2 transition-colors"

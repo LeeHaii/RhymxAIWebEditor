@@ -11,6 +11,12 @@
       "node_modules/@remotion/compositor-win32-x64-msvc/**/*",
       "dist-remotion/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "resources/bin/yt-dlp.exe",
+        "to": "bin/yt-dlp.exe"
+      }
+    ],
     "win": {
       "signAndEditExecutable": false
     }
@@ -21,7 +27,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^2.14.0",
     "@remotion/player": "^4.0.165",
     "@remotion/renderer": "^4.0.165",
     "axios": "^1.6.8",
