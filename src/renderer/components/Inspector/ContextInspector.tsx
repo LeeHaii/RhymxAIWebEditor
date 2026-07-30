@@ -7,15 +7,15 @@ import {
   KeyRound,
   Search,
   SlidersHorizontal,
+  Trash2,
   Video,
   Youtube,
 } from 'lucide-react'
 import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
 import { useEditorStore } from '../../../store/useEditorStore'
-import { searchGoogleImagesWithElement } from '../../services/googleSearchElement'
 
 type InspectorTab = 'properties' | 'media' | 'subtitles'
-type SearchTab = 'google' | 'pexels-image' | 'pexels-video' | 'youtube'
+type SearchTab = 'duckduckgo' | 'pexels-image' | 'pexels-video' | 'youtube'
 
 export default function ContextInspector() {
   const {
@@ -37,7 +37,7 @@ export default function ContextInspector() {
     updateSubtitleSettings,
   } = useEditorStore()
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('properties')
-  const [activeTab, setActiveTab] = useState<SearchTab>('google')
+  const [activeTab, setActiveTab] = useState<SearchTab>('duckduckgo')
   const [searchQuery, setSearchQuery] = useState('')
   const [results, setResults] = useState<any[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -80,8 +80,8 @@ export default function ContextInspector() {
     setSelectedPexels(null)
 
     try {
-      if (activeTab === 'google') {
-        setResults(await searchGoogleImagesWithElement(apiKeys.googleSearchCx, query))
+      if (activeTab === 'duckduckgo') {
+        setResults(await window.electronAPI.searchDuckDuckGoImages(query))
       } else if (activeTab === 'pexels-image') {
         setResults(await window.electronAPI.searchImages(query, apiKeys.pexels))
       } else if (activeTab === 'pexels-video') {
@@ -110,7 +110,7 @@ export default function ContextInspector() {
     if (!activeSceneId) return
     assignMediaToScene(activeSceneId, {
       id: image.id,
-      type: 'google_image',
+      type: 'duckduckgo_image',
       sourceUrl: image.sourceUrl,
       thumbnailUrl: image.thumbnailUrl,
       title: image.title,
@@ -137,6 +137,8 @@ export default function ContextInspector() {
       sourceUrl,
       thumbnailUrl: video.image,
       title: video.user?.name || video.url,
+      sourceStartSec: 0,
+      sourceDurationSec: Number(video.duration) || activeScene?.durationSec,
     })
   }
 
@@ -158,6 +160,8 @@ export default function ContextInspector() {
         sourceUrl: localPath,
         thumbnailUrl: selectedYoutube.thumbnailUrl,
         title: selectedYoutube.title,
+        sourceStartSec: 0,
+        sourceDurationSec: activeScene.durationSec,
       })
     } catch (error) {
       setSearchError(
@@ -176,7 +180,6 @@ export default function ContextInspector() {
 
   return (
     <div className="flex flex-col h-full bg-[#111319] min-w-0">
-      <div id="rhymx-google-cse-host" className="hidden" aria-hidden="true" />
       <div className="px-3 pt-3 bg-[#0e1016] border-b border-white/5">
         <h3 className="font-semibold text-sm text-white mb-3">Inspector</h3>
         <div className="flex">
@@ -233,7 +236,13 @@ export default function ContextInspector() {
                 <NumberProperty
                   label="Duration (seconds)"
                   value={activeAudioClip.durationSec}
-                  minimum={0.2}
+                  minimum={1 / 30}
+                  maximum={
+                    activeAudioClip.sourceDurationSec
+                      ? activeAudioClip.sourceDurationSec -
+                        (activeAudioClip.sourceStartSec ?? 0)
+                      : undefined
+                  }
                   onChange={(durationSec) =>
                     updateAudioClip(activeAudioClip.id, { durationSec })
                   }
@@ -295,7 +304,7 @@ export default function ContextInspector() {
 
           <div className="grid grid-cols-4 border-b border-white/5">
             {([
-              ['google', ImageIcon, 'Google'],
+              ['duckduckgo', ImageIcon, 'DuckDuckGo'],
               ['pexels-image', ImageIcon, 'Pexels Img'],
               ['pexels-video', Video, 'Pexels Vid'],
               ['youtube', Youtube, 'YouTube'],
@@ -326,8 +335,7 @@ export default function ContextInspector() {
             {searchError && (
               <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-[11px] text-red-300">
                 {searchError}
-                {((activeTab === 'youtube' && !apiKeys.youtube) ||
-                  (activeTab === 'google' && !apiKeys.googleSearchCx)) && (
+                {activeTab === 'youtube' && !apiKeys.youtube && (
                   <div className="mt-2 flex items-center gap-1.5 text-red-200/70">
                     <KeyRound className="h-3 w-3" />
                     Add the required credential in the top-right Settings menu.
@@ -340,11 +348,13 @@ export default function ContextInspector() {
               <div className="text-center text-xs text-slate-500 mt-10">Searching…</div>
             ) : (
               <div className="space-y-3">
-                {activeTab === 'google' && results.length > 0 && (
-                  <div className="text-[9px] text-slate-600 text-right">Powered by Google</div>
+                {activeTab === 'duckduckgo' && results.length > 0 && (
+                  <div className="text-[9px] text-slate-600 text-right">
+                    DuckDuckGo results · unofficial endpoint
+                  </div>
                 )}
 
-                {(activeTab === 'google' || activeTab === 'pexels-image') &&
+                {(activeTab === 'duckduckgo' || activeTab === 'pexels-image') &&
                   (results as ImageSearchResult[]).map((image) => (
                     <ImageResult key={image.id} image={image} onUse={applyImage} />
                   ))}
@@ -404,7 +414,7 @@ export default function ContextInspector() {
                           <input
                             type="number"
                             min="0"
-                            step="0.1"
+                            step="0.01"
                             value={ytStart}
                             onChange={(event) => setYtStart(Number(event.target.value))}
                             className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-1.5 text-[10px] text-white"
@@ -519,7 +529,12 @@ function SceneProperties({
           <NumberProperty
             label="Duration (seconds)"
             value={scene.durationSec}
-            minimum={0.2}
+            minimum={1 / 30}
+            maximum={
+              scene.media?.sourceDurationSec
+                ? scene.media.sourceDurationSec - (scene.media.sourceStartSec ?? 0)
+                : undefined
+            }
             onChange={(durationSec) =>
               updateScene(scene.id, {
                 durationSec,
@@ -543,6 +558,34 @@ function SceneProperties({
           </select>
         </label>
       </section>
+      {scene.media && (
+        <section className="rounded-lg border border-white/10 bg-black/15 p-3">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-[9px] uppercase tracking-wider text-slate-500">
+                Attached media
+              </div>
+              <div className="mt-1 truncate text-[11px] text-slate-300">
+                {scene.media.title}
+              </div>
+              {scene.media.sourceDurationSec && (
+                <div className="mt-0.5 text-[9px] text-slate-600">
+                  Source {(scene.media.sourceStartSec ?? 0).toFixed(2)}s –{' '}
+                  {scene.media.sourceDurationSec.toFixed(2)}s
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => updateScene(scene.id, { media: null })}
+              className="h-8 px-2 rounded-md border border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 flex items-center gap-1.5 text-[9px]"
+              title="Remove media from this segment"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Remove
+            </button>
+          </div>
+        </section>
+      )}
       <section className="space-y-3">
         <h4 className="text-[10px] uppercase tracking-wider text-slate-500">
           Transform & audio
@@ -759,7 +802,7 @@ function EmptyInspector({ text }: { text: string }) {
 }
 
 function tabLabel(tab: SearchTab) {
-  if (tab === 'google') return 'Google Images'
+  if (tab === 'duckduckgo') return 'DuckDuckGo Images'
   if (tab === 'pexels-image') return 'Pexels Images'
   if (tab === 'pexels-video') return 'Pexels Video'
   return 'YouTube'
@@ -769,11 +812,13 @@ function NumberProperty({
   label,
   value,
   minimum,
+  maximum,
   onChange,
 }: {
   label: string
   value: number
   minimum: number
+  maximum?: number
   onChange: (value: number) => void
 }) {
   return (
@@ -782,9 +827,17 @@ function NumberProperty({
       <input
         type="number"
         min={minimum}
-        step="0.1"
-        value={Number(value.toFixed(2))}
-        onChange={(event) => onChange(Math.max(minimum, Number(event.target.value)))}
+        max={maximum}
+        step="0.01"
+        value={Number(value.toFixed(3))}
+        onChange={(event) =>
+          onChange(
+            Math.min(
+              maximum ?? Number.POSITIVE_INFINITY,
+              Math.max(minimum, Number(event.target.value))
+            )
+          )
+        }
         className="mt-1 w-full bg-[#090b10] border border-white/10 rounded p-2 text-[10px] text-white"
       />
     </label>

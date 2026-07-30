@@ -4,23 +4,30 @@ import { Player, PlayerRef } from '@remotion/player'
 import { MainComposition } from '../../remotion/Composition'
 import { useEditorStore } from '../../store/useEditorStore'
 
+const QUALITY_SIZES = {
+  low: { width: 640, height: 360 },
+  medium: { width: 1280, height: 720 },
+  high: { width: 1920, height: 1080 },
+  ultra: { width: 3840, height: 2160 },
+} as const
+
 export default function PlayerCanvas() {
-  const {
-    scenes,
-    videoTracks,
-    voiceTrackSettings,
-    audioTrackSettings,
-    subtitles,
-    audioFile,
-    audioClips,
-    subtitleSettings,
-    seekTargetSec,
-    seekVersion,
-    playbackCommand,
-    playbackVersion,
-    setCurrentTimeSec,
-    setIsPlaying,
-  } = useEditorStore()
+  // Keep playback-clock updates from re-rendering the Player and recreating
+  // every active media element. This is especially important with overlays.
+  const scenes = useEditorStore((state) => state.scenes)
+  const videoTracks = useEditorStore((state) => state.videoTracks)
+  const voiceTrackSettings = useEditorStore((state) => state.voiceTrackSettings)
+  const audioTrackSettings = useEditorStore((state) => state.audioTrackSettings)
+  const subtitles = useEditorStore((state) => state.subtitles)
+  const audioFile = useEditorStore((state) => state.audioFile)
+  const audioClips = useEditorStore((state) => state.audioClips)
+  const subtitleSettings = useEditorStore((state) => state.subtitleSettings)
+  const seekTargetSec = useEditorStore((state) => state.seekTargetSec)
+  const seekVersion = useEditorStore((state) => state.seekVersion)
+  const playbackCommand = useEditorStore((state) => state.playbackCommand)
+  const playbackVersion = useEditorStore((state) => state.playbackVersion)
+  const setCurrentTimeSec = useEditorStore((state) => state.setCurrentTimeSec)
+  const setIsPlaying = useEditorStore((state) => state.setIsPlaying)
   const playerRef = useRef<PlayerRef>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState<'fit' | number>('fit')
@@ -31,14 +38,9 @@ export default function PlayerCanvas() {
         | 'low'
         | 'medium'
         | 'high'
-        | 'ultra') || 'high'
+        | 'ultra') || 'medium'
   )
-  const qualitySize = {
-    low: { width: 640, height: 360 },
-    medium: { width: 1280, height: 720 },
-    high: { width: 1920, height: 1080 },
-    ultra: { width: 3840, height: 2160 },
-  }[quality]
+  const qualitySize = QUALITY_SIZES[quality]
 
   const totalDurationSec = useMemo(() => {
     const sceneEnd = scenes.reduce((max, scene) => Math.max(max, scene.endTimeSec), 0)
@@ -53,6 +55,30 @@ export default function PlayerCanvas() {
     return Math.max(audioFile?.duration || 0, sceneEnd, subtitleEnd, clipEnd, 10)
   }, [audioFile?.duration, scenes, subtitles, audioClips])
   const durationInFrames = Math.max(1, Math.round(totalDurationSec * 30))
+  const inputProps = useMemo(
+    () => ({
+      scenes,
+      videoTracks,
+      voiceTrackSettings,
+      audioTrackSettings,
+      renderScale: qualitySize.width / 1920,
+      subtitles,
+      audioPath: audioFile?.path || '',
+      audioClips,
+      subtitleSettings,
+    }),
+    [
+      scenes,
+      videoTracks,
+      voiceTrackSettings,
+      audioTrackSettings,
+      qualitySize.width,
+      subtitles,
+      audioFile?.path,
+      audioClips,
+      subtitleSettings,
+    ]
+  )
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -158,17 +184,7 @@ export default function PlayerCanvas() {
           <Player
             ref={playerRef}
             component={MainComposition}
-            inputProps={{
-              scenes,
-              videoTracks,
-              voiceTrackSettings,
-              audioTrackSettings,
-              renderScale: qualitySize.width / 1920,
-              subtitles,
-              audioPath: audioFile?.path || '',
-              audioClips,
-              subtitleSettings,
-            }}
+            inputProps={inputProps}
             durationInFrames={durationInFrames}
             fps={30}
             compositionWidth={qualitySize.width}

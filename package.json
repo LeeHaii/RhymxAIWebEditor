@@ -7,6 +7,9 @@
     "directories": {
       "output": "release"
     },
+    "asarUnpack": [
+      "node_modules/@remotion/compositor-win32-x64-msvc/**/*"
+    ],
     "win": {
       "signAndEditExecutable": false
     }

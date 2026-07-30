@@ -1,9 +1,11 @@
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import path from 'path'
+import { fileURLToPath } from 'node:url'
 import { transcribeAudio } from './services/gemini'
 import { trimYouTube } from './services/sidecar'
-import { searchGoogleImages, searchImages } from './services/imageSearch'
+import { searchDuckDuckGoImages, searchImages } from './services/imageSearch'
 import { searchYouTube } from './services/youtubeSearch'
+import { getMediaDuration } from './services/mediaMetadata'
 import { cancelActiveExport, exportVideo } from './services/export'
 import { getEncoderCapabilities } from './services/hardware'
 import fs from 'fs/promises'
@@ -64,8 +66,12 @@ ipcMain.handle('open-audio-file', async () => {
   })
   if (result.canceled || result.filePaths.length === 0) return null
   
-  // Return the path. Real duration would be calculated using ffprobe.
-  return { path: result.filePaths[0], duration: 0 }
+  const filePath = result.filePaths[0]
+  return { path: filePath, duration: (await getMediaDuration(filePath)) || 0 }
+})
+
+ipcMain.handle('get-media-duration', async (_, filePath: string) => {
+  return await getMediaDuration(filePath)
 })
 
 ipcMain.handle('transcribe-audio', async (_, filePath: string, apiKey: string) => {
@@ -91,18 +97,20 @@ ipcMain.handle('open-media-files', async () => {
 
   const videoExtensions = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi'])
   const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
-  return result.filePaths.map((filePath) => {
+  return await Promise.all(result.filePaths.map(async (filePath) => {
     const extension = path.extname(filePath).slice(1).toLowerCase()
+    const kind = videoExtensions.has(extension)
+      ? 'video'
+      : imageExtensions.has(extension)
+        ? 'image'
+        : 'music'
     return {
       path: filePath,
       name: path.basename(filePath),
-      kind: videoExtensions.has(extension)
-        ? 'video'
-        : imageExtensions.has(extension)
-          ? 'image'
-          : 'music',
+      kind,
+      durationSec: kind === 'image' ? undefined : (await getMediaDuration(filePath)) || undefined,
     }
-  })
+  }))
 })
 
 const getProjectsDirectory = () => path.join(app.getPath('userData'), 'projects')
@@ -147,7 +155,37 @@ ipcMain.handle('list-projects', async () => {
 
 ipcMain.handle('load-project', async (_, projectId: string) => {
   const contents = await fs.readFile(getProjectPath(projectId), 'utf8')
-  return JSON.parse(contents) as ProjectDocument
+  const project = JSON.parse(contents) as ProjectDocument
+  await Promise.all([
+    ...(project.mediaLibrary || []).map(async (asset) => {
+      if (asset.kind === 'image' || asset.durationSec) return
+      asset.durationSec = (await getMediaDuration(asset.path)) || undefined
+    }),
+    ...(project.audioClips || []).map(async (clip) => {
+      if (clip.sourceDurationSec) return
+      clip.sourceDurationSec = (await getMediaDuration(clip.path)) || undefined
+      clip.sourceStartSec = clip.sourceStartSec ?? 0
+    }),
+    ...(project.scenes || []).map(async (scene) => {
+      const media = scene.media
+      if (
+        !media ||
+        media.sourceDurationSec ||
+        media.type === 'local_image' ||
+        media.type === 'google_image' ||
+        media.type === 'duckduckgo_image' ||
+        /^(https?:|data:|blob:)/.test(media.sourceUrl)
+      ) {
+        return
+      }
+      const mediaPath = media.sourceUrl.startsWith('file:')
+        ? fileURLToPath(media.sourceUrl)
+        : media.sourceUrl
+      media.sourceDurationSec = (await getMediaDuration(mediaPath)) || undefined
+      media.sourceStartSec = media.sourceStartSec ?? 0
+    }),
+  ])
+  return project
 })
 
 ipcMain.handle('save-project', async (_, project: ProjectDocument) => {
@@ -167,12 +205,9 @@ ipcMain.handle('search-images', async (_, query: string, pexelsKey?: string) => 
   return await searchImages(query, pexelsKey)
 })
 
-ipcMain.handle(
-  'search-google-images',
-  async (_, query: string, apiKey: string, searchEngineId: string) => {
-    return await searchGoogleImages(query, apiKey, searchEngineId)
-  }
-)
+ipcMain.handle('search-duckduckgo-images', async (_, query: string) => {
+  return await searchDuckDuckGoImages(query)
+})
 
 ipcMain.handle('search-youtube', async (_, query: string, apiKey: string) => {
   return await searchYouTube(query, apiKey)
@@ -236,9 +271,3 @@ ipcMain.handle('get-gemini-key', () => getSecret('gemini'))
 ipcMain.handle('set-gemini-key', (_, key: string) => setSecret('gemini', key))
 ipcMain.handle('get-youtube-key', () => getSecret('youtube'))
 ipcMain.handle('set-youtube-key', (_, key: string) => setSecret('youtube', key))
-ipcMain.handle('get-google-search-key', () => getSecret('googleSearch'))
-ipcMain.handle('set-google-search-key', (_, key: string) => setSecret('googleSearch', key))
-ipcMain.handle('get-google-search-cx', () => getSecret('googleSearchCx'))
-ipcMain.handle('set-google-search-cx', (_, value: string) =>
-  setSecret('googleSearchCx', value)
-)

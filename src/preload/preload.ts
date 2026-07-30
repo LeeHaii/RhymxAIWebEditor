@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   openAudioFile: () => ipcRenderer.invoke('open-audio-file'),
   openMediaFiles: () => ipcRenderer.invoke('open-media-files'),
+  getMediaDuration: (filePath: string) => ipcRenderer.invoke('get-media-duration', filePath),
   transcribeAudio: (filePath: string, apiKey: string) => ipcRenderer.invoke('transcribe-audio', filePath, apiKey),
   listProjects: () => ipcRenderer.invoke('list-projects'),
   loadProject: (projectId: string) => ipcRenderer.invoke('load-project', projectId),
@@ -10,8 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   trimYouTube: (url: string, startTime: number, endTime: number) => ipcRenderer.invoke('trim-youtube', url, startTime, endTime),
   searchImages: (query: string, pexelsKey?: string) =>
     ipcRenderer.invoke('search-images', query, pexelsKey),
-  searchGoogleImages: (query: string, apiKey: string, searchEngineId: string) =>
-    ipcRenderer.invoke('search-google-images', query, apiKey, searchEngineId),
+  searchDuckDuckGoImages: (query: string) =>
+    ipcRenderer.invoke('search-duckduckgo-images', query),
   searchYouTube: (query: string, apiKey: string) =>
     ipcRenderer.invoke('search-youtube', query, apiKey),
   chooseExportPath: (defaultName: string) =>
@@ -29,8 +30,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setGeminiKey: (key: string) => ipcRenderer.invoke('set-gemini-key', key),
   getYouTubeKey: () => ipcRenderer.invoke('get-youtube-key'),
   setYouTubeKey: (key: string) => ipcRenderer.invoke('set-youtube-key', key),
-  getGoogleSearchKey: () => ipcRenderer.invoke('get-google-search-key'),
-  setGoogleSearchKey: (key: string) => ipcRenderer.invoke('set-google-search-key', key),
-  getGoogleSearchCx: () => ipcRenderer.invoke('get-google-search-cx'),
-  setGoogleSearchCx: (value: string) => ipcRenderer.invoke('set-google-search-cx', value),
 })

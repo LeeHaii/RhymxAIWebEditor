@@ -79,10 +79,12 @@ function EditorWorkspace() {
         else if (state.activeAudioClipId) state.removeAudioClip(state.activeAudioClipId)
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault()
-        state.requestSeek(Math.max(0, state.currentTimeSec - (event.shiftKey ? 5 : 1)))
+        state.requestSeek(
+          Math.max(0, state.currentTimeSec - (event.shiftKey ? 1 : 1 / 30))
+        )
       } else if (event.key === 'ArrowRight') {
         event.preventDefault()
-        state.requestSeek(state.currentTimeSec + (event.shiftKey ? 5 : 1))
+        state.requestSeek(state.currentTimeSec + (event.shiftKey ? 1 : 1 / 30))
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -179,15 +181,11 @@ function App() {
       window.electronAPI.getGeminiKey(),
       window.electronAPI.getPexelsKey(),
       window.electronAPI.getYouTubeKey(),
-      window.electronAPI.getGoogleSearchKey(),
-      window.electronAPI.getGoogleSearchCx(),
-    ]).then(([gemini, pexels, youtube, googleSearch, googleSearchCx]) => {
+    ]).then(([gemini, pexels, youtube]) => {
       setApiKeys({
         gemini: gemini || '',
         pexels: pexels || '',
         youtube: youtube || '',
-        googleSearch: googleSearch || '',
-        googleSearchCx: googleSearchCx || '',
       })
     })
   }, [setApiKeys])

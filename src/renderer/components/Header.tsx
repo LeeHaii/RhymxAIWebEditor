@@ -35,15 +35,13 @@ export default function Header() {
   }
 
   const updateKey = (
-    key: 'gemini' | 'pexels' | 'youtube' | 'googleSearch' | 'googleSearchCx',
+    key: 'gemini' | 'pexels' | 'youtube',
     value: string
   ) => {
     setApiKeys({ [key]: value })
     if (key === 'gemini') window.electronAPI.setGeminiKey(value)
     else if (key === 'pexels') window.electronAPI.setPexelsKey(value)
-    else if (key === 'youtube') window.electronAPI.setYouTubeKey(value)
-    else if (key === 'googleSearch') window.electronAPI.setGoogleSearchKey(value)
-    else window.electronAPI.setGoogleSearchCx(value)
+    else window.electronAPI.setYouTubeKey(value)
   }
 
   return (
@@ -154,17 +152,6 @@ export default function Header() {
                 placeholder="Required for YouTube search"
               />
             </label>
-            <label className="block">
-              <span className="block text-[11px] text-slate-500 mb-1.5">
-                Google Programmable Search Engine ID (CX)
-              </span>
-              <input
-                className="w-full bg-[#0d0f14] border border-white/10 focus:border-violet-500/50 outline-none rounded-lg p-2.5 text-xs text-slate-300"
-                value={apiKeys.googleSearchCx}
-                onChange={(event) => updateKey('googleSearchCx', event.target.value)}
-                placeholder="Used by the embedded Google Images panel"
-              />
-            </label>
             <button
               onClick={() => setShowSettings(false)}
               className="w-full bg-white/5 hover:bg-white/10 rounded-lg py-2 text-xs"
@@ -185,8 +172,8 @@ export default function Header() {
               ['Delete selected scene', 'Delete'],
               ['Undo', 'Ctrl+Z'],
               ['Redo', 'Ctrl+Shift+Z'],
-              ['Move playhead 1 second', '← / →'],
-              ['Move playhead 5 seconds', 'Shift+← / →'],
+              ['Move playhead 1 frame', '← / →'],
+              ['Move playhead 1 second', 'Shift+← / →'],
               ['Save project', 'Ctrl+S'],
               ['Split subtitle at cursor', 'Enter'],
               ['Subtitle line break', 'Shift+Enter'],

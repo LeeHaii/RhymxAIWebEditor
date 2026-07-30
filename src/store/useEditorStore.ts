@@ -46,13 +46,49 @@ const normalizeSubtitleSettings = (settings?: SubtitleSettings): SubtitleSetting
 })
 
 const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): SceneSegment[] =>
-  scenes.map((scene) => ({
-    ...scene,
-    trackId: scene.trackId || fallbackTrackId,
-    volume: scene.volume ?? 1,
-    scale: scene.scale ?? 1,
-    opacity: scene.opacity ?? 1,
-  }))
+  scenes.map((scene) => {
+    const media = scene.media
+      ? {
+          ...scene.media,
+          sourceStartSec: scene.media.sourceStartSec ?? 0,
+          sourceDurationSec: scene.media.sourceDurationSec ?? scene.media.durationSec,
+        }
+      : null
+    const isImage =
+      media?.type === 'local_image' ||
+      media?.type === 'google_image' ||
+      media?.type === 'duckduckgo_image'
+    const maximumDuration =
+      media && !isImage && media.sourceDurationSec
+        ? Math.max(1 / 30, media.sourceDurationSec - (media.sourceStartSec ?? 0))
+        : Number.POSITIVE_INFINITY
+    const durationSec = Math.min(scene.durationSec, maximumDuration)
+    return {
+      ...scene,
+      media,
+      durationSec,
+      endTimeSec: scene.startTimeSec + durationSec,
+      trackId: scene.trackId || fallbackTrackId,
+      volume: scene.volume ?? 1,
+      scale: scene.scale ?? 1,
+      opacity: scene.opacity ?? 1,
+    }
+  })
+
+const normalizeAudioClips = (clips?: TimelineAudioClip[]): TimelineAudioClip[] =>
+  (clips || []).map((clip) => {
+    const sourceStartSec = clip.sourceStartSec ?? 0
+    return {
+      ...clip,
+      sourceStartSec,
+      durationSec: clip.sourceDurationSec
+        ? Math.min(
+            clip.durationSec,
+            Math.max(1 / 30, clip.sourceDurationSec - sourceStartSec)
+          )
+        : clip.durationSec,
+    }
+  })
 
 interface HistorySnapshot {
   audioFile: { path: string; duration: number } | null
@@ -90,8 +126,6 @@ interface EditorStore {
     gemini: string
     pexels: string
     youtube: string
-    googleSearch: string
-    googleSearchCx: string
   }
   isProcessingAudio: boolean
   processingError: string | null
@@ -112,7 +146,12 @@ interface EditorStore {
   setScenes: (scenes: SceneSegment[]) => void
   updateScene: (id: string, updates: Partial<SceneSegment>) => void
   splitScene: (id: string, atTimeSec: number) => void
-  trimScene: (id: string, startTimeSec: number, endTimeSec: number) => void
+  trimScene: (
+    id: string,
+    startTimeSec: number,
+    endTimeSec: number,
+    sourceStartSec?: number
+  ) => void
   deleteScene: (id: string) => void
   addVideoTrack: () => void
   removeVideoTrack: (id: string) => void
@@ -134,8 +173,6 @@ interface EditorStore {
     gemini?: string
     pexels?: string
     youtube?: string
-    googleSearch?: string
-    googleSearchCx?: string
   }) => void
   setIsProcessingAudio: (processing: boolean) => void
   setProcessingError: (error: string | null) => void
@@ -147,6 +184,12 @@ interface EditorStore {
   removeAudioClip: (id: string) => void
   moveAudioClip: (id: string, startTimeSec: number) => void
   updateAudioClip: (id: string, updates: Partial<TimelineAudioClip>) => void
+  trimAudioClip: (
+    id: string,
+    startTimeSec: number,
+    durationSec: number,
+    sourceStartSec: number
+  ) => void
   updateSubtitleSettings: (updates: Partial<SubtitleSettings>) => void
   checkpointHistory: () => void
   undo: () => void
@@ -218,8 +261,6 @@ export const useEditorStore = create<EditorStore>((set) => ({
     gemini: '',
     pexels: '',
     youtube: '',
-    googleSearch: '',
-    googleSearchCx: '',
   },
   isProcessingAudio: false,
   processingError: null,
@@ -282,7 +323,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       },
       subtitles,
       mediaLibrary: project.mediaLibrary || [],
-      audioClips: project.audioClips || [],
+      audioClips: normalizeAudioClips(project.audioClips),
       subtitleSettings: normalizeSubtitleSettings(project.subtitleSettings),
       activeSceneId: scenes[0]?.id || null,
       activeAudioClipId: null,
@@ -373,12 +414,24 @@ export const useEditorStore = create<EditorStore>((set) => ({
         startTimeSec: atTimeSec,
         durationSec: scene.endTimeSec - atTimeSec,
         transcriptText: words.slice(wordSplit).join(' ') || scene.transcriptText,
+        media:
+          scene.media &&
+          scene.media.type !== 'local_image' &&
+          scene.media.type !== 'google_image' &&
+          scene.media.type !== 'duckduckgo_image'
+            ? {
+                ...scene.media,
+                sourceStartSec:
+                  (scene.media.sourceStartSec ?? 0) +
+                  (atTimeSec - scene.startTimeSec),
+              }
+            : scene.media,
       }
       const scenes = [...state.scenes]
       scenes.splice(index, 1, first, second)
       return historyChange(state, { scenes, activeSceneId: second.id })
     }),
-  trimScene: (id, startTimeSec, endTimeSec) =>
+  trimScene: (id, startTimeSec, endTimeSec, sourceStartSec) =>
     set((state) => ({
       scenes: state.scenes.map((scene) =>
         scene.id === id
@@ -387,6 +440,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
               startTimeSec,
               endTimeSec,
               durationSec: Math.max(0.2, endTimeSec - startTimeSec),
+              media:
+                scene.media && sourceStartSec !== undefined
+                  ? { ...scene.media, sourceStartSec }
+                  : scene.media,
             }
           : scene
       ),
@@ -448,7 +505,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set((state) => {
       if (asset.kind !== 'video' && asset.kind !== 'image') return state
       const id = crypto.randomUUID()
-      const durationSec = Math.max(0.2, asset.durationSec || 5)
+      const durationSec =
+        asset.kind === 'video'
+          ? Math.max(0.2, Math.min(5, asset.durationSec || 5))
+          : 5
       const start = Math.max(0, startTimeSec)
       const scene: SceneSegment = {
         id,
@@ -464,6 +524,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
           sourceUrl: asset.path,
           thumbnailUrl: asset.path,
           title: asset.name,
+          sourceStartSec: 0,
+          sourceDurationSec: asset.durationSec,
           imageFit: 'cover',
           enableKenBurnsEffect: asset.kind === 'image',
         },
@@ -583,7 +645,33 @@ export const useEditorStore = create<EditorStore>((set) => ({
   assignMediaToScene: (sceneId, media) =>
     set((state) =>
       historyChange(state, {
-        scenes: state.scenes.map((scene) => (scene.id === sceneId ? { ...scene, media } : scene)),
+        scenes: state.scenes.map((scene) => {
+          if (scene.id !== sceneId) return scene
+          const normalizedMedia = {
+            ...media,
+            sourceStartSec: media.sourceStartSec ?? 0,
+            sourceDurationSec: media.sourceDurationSec ?? media.durationSec,
+          }
+          const isImage =
+            normalizedMedia.type === 'local_image' ||
+            normalizedMedia.type === 'google_image' ||
+            normalizedMedia.type === 'duckduckgo_image'
+          const maximumDuration =
+            !isImage && normalizedMedia.sourceDurationSec
+              ? Math.max(
+                  1 / 30,
+                  normalizedMedia.sourceDurationSec -
+                    (normalizedMedia.sourceStartSec ?? 0)
+                )
+              : Number.POSITIVE_INFINITY
+          const durationSec = Math.min(scene.durationSec, maximumDuration)
+          return {
+            ...scene,
+            media: normalizedMedia,
+            durationSec,
+            endTimeSec: scene.startTimeSec + durationSec,
+          }
+        }),
       })
     ),
   addAudioClip: (asset, startTimeSec) =>
@@ -599,6 +687,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
             kind: asset.kind === 'sfx' ? 'sfx' : 'music',
             startTimeSec: Math.max(0, startTimeSec ?? state.currentTimeSec),
             durationSec: asset.durationSec || 10,
+            sourceStartSec: 0,
+            sourceDurationSec: asset.durationSec,
             volume: asset.kind === 'sfx' ? 1 : 0.35,
           },
         ],
@@ -624,10 +714,40 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set((state) =>
       historyChange(state, {
         audioClips: state.audioClips.map((clip) =>
-          clip.id === id ? { ...clip, ...updates } : clip
+          clip.id === id
+            ? (() => {
+                const merged = { ...clip, ...updates }
+                const sourceStartSec = Math.max(0, merged.sourceStartSec ?? 0)
+                const maximumDuration = merged.sourceDurationSec
+                  ? Math.max(0.05, merged.sourceDurationSec - sourceStartSec)
+                  : Number.POSITIVE_INFINITY
+                return {
+                  ...merged,
+                  sourceStartSec,
+                  durationSec: Math.max(
+                    0.05,
+                    Math.min(merged.durationSec, maximumDuration)
+                  ),
+                }
+              })()
+            : clip
         ),
       })
     ),
+  trimAudioClip: (id, startTimeSec, durationSec, sourceStartSec) =>
+    set((state) => ({
+      audioClips: state.audioClips.map((clip) =>
+        clip.id === id
+          ? {
+              ...clip,
+              startTimeSec: Math.max(0, startTimeSec),
+              durationSec: Math.max(0.05, durationSec),
+              sourceStartSec: Math.max(0, sourceStartSec),
+            }
+          : clip
+      ),
+      projectUpdatedAt: markUpdated(),
+    })),
   updateSubtitleSettings: (updates) =>
     set((state) =>
       historyChange(state, {

@@ -4,6 +4,7 @@ import {
   Eye,
   EyeOff,
   Layers3,
+  Magnet,
   Mic2,
   Minus,
   Music2,
@@ -21,16 +22,19 @@ const VOICE_HEIGHT = 36
 const VIDEO_HEIGHT = 54
 const TEXT_HEIGHT = 40
 const AUDIO_HEIGHT = 40
+const FPS = 30
+const MIN_CLIP_DURATION = 1 / FPS
 
 function formatTime(seconds: number) {
   const safe = Math.max(0, seconds)
   const minutes = Math.floor(safe / 60)
-  const remaining = Math.floor(safe % 60)
-  return `${minutes}:${remaining.toString().padStart(2, '0')}`
+  const remaining = safe % 60
+  return `${minutes}:${remaining.toFixed(2).padStart(5, '0')}`
 }
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value))
+const toFrame = (seconds: number) => Math.round(seconds * FPS) / FPS
 
 export default function Timeline() {
   const {
@@ -63,9 +67,14 @@ export default function Timeline() {
     moveScene,
     moveAudioClip,
     removeAudioClip,
+    trimAudioClip,
   } = useEditorStore()
   const trackRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(100)
+  const [snapEnabled, setSnapEnabled] = useState(
+    () => localStorage.getItem('rhymx.timelineSnap') !== 'false'
+  )
+  const [snapGuideSec, setSnapGuideSec] = useState<number | null>(null)
 
   const totalDuration = useMemo(() => {
     const sceneEnd = scenes.reduce((max, scene) => Math.max(max, scene.endTimeSec), 0)
@@ -83,23 +92,100 @@ export default function Timeline() {
   const subtitleTop = VOICE_HEIGHT + videoTracks.length * VIDEO_HEIGHT
   const audioTop = subtitleTop + TEXT_HEIGHT
   const bodyHeight = audioTop + AUDIO_HEIGHT
+  const rulerDivisions = Math.max(10, Math.round(zoom / 10))
   const left = (seconds: number) => `${(seconds / totalDuration) * 100}%`
   const width = (seconds: number) => `${Math.max(0.12, (seconds / totalDuration) * 100)}%`
 
-  const seekAtClientX = (clientX: number) => {
+  const snapCandidates = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            0,
+            ...scenes.flatMap((scene) => [scene.startTimeSec, scene.endTimeSec]),
+            ...subtitles.flatMap((subtitle) => [
+              subtitle.startTimeSec,
+              subtitle.endTimeSec,
+            ]),
+            ...audioClips.flatMap((clip) => [
+              clip.startTimeSec,
+              clip.startTimeSec + clip.durationSec,
+            ]),
+          ].map(toFrame)
+        )
+      ),
+    [scenes, subtitles, audioClips]
+  )
+
+  const snapValue = (
+    value: number,
+    rectangleWidth: number,
+    candidates = snapCandidates
+  ) => {
+    if (!snapEnabled) return { value: toFrame(value), guide: null as number | null }
+    const threshold = (8 / Math.max(1, rectangleWidth)) * totalDuration
+    const closest = candidates.reduce<number | null>((best, candidate) => {
+      if (Math.abs(candidate - value) > threshold) return best
+      if (best === null || Math.abs(candidate - value) < Math.abs(best - value)) {
+        return candidate
+      }
+      return best
+    }, null)
+    return {
+      value: closest ?? toFrame(value),
+      guide: closest,
+    }
+  }
+
+  const snapClipStart = (
+    value: number,
+    duration: number,
+    rectangleWidth: number,
+    candidates: number[]
+  ) => {
+    if (!snapEnabled) return { value: toFrame(value), guide: null as number | null }
+    const threshold = (8 / Math.max(1, rectangleWidth)) * totalDuration
+    let bestOffset: number | null = null
+    let guide: number | null = null
+    for (const candidate of candidates) {
+      for (const edge of [value, value + duration]) {
+        const offset = candidate - edge
+        if (
+          Math.abs(offset) <= threshold &&
+          (bestOffset === null || Math.abs(offset) < Math.abs(bestOffset))
+        ) {
+          bestOffset = offset
+          guide = candidate
+        }
+      }
+    }
+    return {
+      value: bestOffset === null ? toFrame(value) : value + bestOffset,
+      guide,
+    }
+  }
+
+  const seekAtClientX = (clientX: number, disableSnap = false) => {
     const rectangle = trackRef.current?.getBoundingClientRect()
     if (!rectangle) return
     const ratio = clamp((clientX - rectangle.left) / rectangle.width, 0, 1)
-    requestSeek(ratio * totalDuration)
+    const rawTime = ratio * totalDuration
+    const snapped = disableSnap
+      ? { value: toFrame(rawTime), guide: null }
+      : snapValue(rawTime, rectangle.width)
+    setSnapGuideSec(snapped.guide)
+    requestSeek(snapped.value)
   }
 
   const beginScrub = (event: PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
-    seekAtClientX(event.clientX)
-    const onMove = (moveEvent: globalThis.PointerEvent) => seekAtClientX(moveEvent.clientX)
+    seekAtClientX(event.clientX, event.altKey)
+    const onMove = (moveEvent: globalThis.PointerEvent) =>
+      seekAtClientX(moveEvent.clientX, moveEvent.altKey)
     const onUp = () => {
+      setSnapGuideSec(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
@@ -120,24 +206,75 @@ export default function Timeline() {
     const pointerStart = event.clientX
     const originalStart = scene.startTimeSec
     const originalEnd = scene.endTimeSec
+    const originalSourceStart = scene.media?.sourceStartSec ?? 0
+    const sourceDuration = scene.media?.sourceDurationSec
+    const isStillImage =
+      scene.media?.type === 'local_image' ||
+      scene.media?.type === 'google_image' ||
+      scene.media?.type === 'duckduckgo_image'
+    const hasSourceCap = Boolean(scene.media && !isStillImage && sourceDuration)
+    const candidates = snapCandidates.filter(
+      (candidate) =>
+        Math.abs(candidate - originalStart) > 1 / FPS &&
+        Math.abs(candidate - originalEnd) > 1 / FPS
+    )
 
     const onMove = (moveEvent: globalThis.PointerEvent) => {
       const delta = ((moveEvent.clientX - pointerStart) / rectangle.width) * totalDuration
       if (edge === 'start') {
+        const minimumStart = hasSourceCap
+          ? Math.max(0, originalStart - originalSourceStart)
+          : 0
+        const rawStart = clamp(
+          originalStart + delta,
+          minimumStart,
+          originalEnd - MIN_CLIP_DURATION
+        )
+        const snapped = moveEvent.altKey
+          ? { value: toFrame(rawStart), guide: null }
+          : snapValue(rawStart, rectangle.width, candidates)
+        const nextStart = clamp(
+          snapped.value,
+          minimumStart,
+          originalEnd - MIN_CLIP_DURATION
+        )
+        setSnapGuideSec(snapped.guide)
         trimScene(
           scene.id,
-          Math.max(0, Math.min(originalEnd - 0.2, originalStart + delta)),
-          originalEnd
+          nextStart,
+          originalEnd,
+          hasSourceCap
+            ? Math.max(0, originalSourceStart + nextStart - originalStart)
+            : undefined
         )
       } else {
+        const maximumEnd = hasSourceCap
+          ? originalStart + Math.max(0, (sourceDuration || 0) - originalSourceStart)
+          : Number.POSITIVE_INFINITY
+        const rawEnd = clamp(
+          originalEnd + delta,
+          originalStart + MIN_CLIP_DURATION,
+          maximumEnd
+        )
+        const snapped = moveEvent.altKey
+          ? { value: toFrame(rawEnd), guide: null }
+          : snapValue(rawEnd, rectangle.width, candidates)
+        const nextEnd = clamp(
+          snapped.value,
+          originalStart + MIN_CLIP_DURATION,
+          maximumEnd
+        )
+        setSnapGuideSec(snapped.guide)
         trimScene(
           scene.id,
           originalStart,
-          Math.max(originalStart + 0.2, originalEnd + delta)
+          nextEnd,
+          hasSourceCap ? originalSourceStart : undefined
         )
       }
     }
     const onUp = () => {
+      setSnapGuideSec(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
@@ -155,6 +292,11 @@ export default function Timeline() {
     const pointerX = event.clientX
     const pointerY = event.clientY
     const originalStart = scene.startTimeSec
+    const candidates = snapCandidates.filter(
+      (candidate) =>
+        Math.abs(candidate - scene.startTimeSec) > 1 / FPS &&
+        Math.abs(candidate - scene.endTimeSec) > 1 / FPS
+    )
     let dragging = false
 
     const onMove = (moveEvent: globalThis.PointerEvent) => {
@@ -164,7 +306,12 @@ export default function Timeline() {
       }
       if (!dragging) return
       const deltaTime = ((moveEvent.clientX - pointerX) / rectangle.width) * totalDuration
-      const newStart = Math.max(0, originalStart + deltaTime)
+      const rawStart = Math.max(0, originalStart + deltaTime)
+      const snapped = moveEvent.altKey
+        ? { value: toFrame(rawStart), guide: null }
+        : snapClipStart(rawStart, scene.durationSec, rectangle.width, candidates)
+      const newStart = Math.max(0, snapped.value)
+      setSnapGuideSec(snapped.guide)
       const rawTrackIndex = Math.floor(
         (moveEvent.clientY - rectangle.top - VOICE_HEIGHT) / VIDEO_HEIGHT
       )
@@ -172,7 +319,8 @@ export default function Timeline() {
       moveScene(scene.id, newStart, videoTracks[trackIndex].id)
     }
     const onUp = (upEvent: globalThis.PointerEvent) => {
-      if (!dragging) seekAtClientX(upEvent.clientX)
+      if (!dragging) seekAtClientX(upEvent.clientX, upEvent.altKey)
+      setSnapGuideSec(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
@@ -183,7 +331,8 @@ export default function Timeline() {
   const startAudioDrag = (
     event: PointerEvent<HTMLDivElement>,
     clipId: string,
-    originalStart: number
+    originalStart: number,
+    durationSec: number
   ) => {
     if (event.button !== 0) return
     event.preventDefault()
@@ -192,6 +341,11 @@ export default function Timeline() {
     if (!rectangle) return
     setActiveAudioClipId(clipId)
     const pointerX = event.clientX
+    const candidates = snapCandidates.filter(
+      (candidate) =>
+        Math.abs(candidate - originalStart) > 1 / FPS &&
+        Math.abs(candidate - (originalStart + durationSec)) > 1 / FPS
+    )
     let dragging = false
     const onMove = (moveEvent: globalThis.PointerEvent) => {
       if (!dragging && Math.abs(moveEvent.clientX - pointerX) > 3) {
@@ -200,9 +354,99 @@ export default function Timeline() {
       }
       if (!dragging) return
       const deltaTime = ((moveEvent.clientX - pointerX) / rectangle.width) * totalDuration
-      moveAudioClip(clipId, Math.max(0, originalStart + deltaTime))
+      const rawStart = Math.max(0, originalStart + deltaTime)
+      const snapped = moveEvent.altKey
+        ? { value: toFrame(rawStart), guide: null }
+        : snapClipStart(rawStart, durationSec, rectangle.width, candidates)
+      setSnapGuideSec(snapped.guide)
+      moveAudioClip(clipId, Math.max(0, snapped.value))
     }
     const onUp = () => {
+      setSnapGuideSec(null)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const startAudioTrim = (
+    event: PointerEvent<HTMLDivElement>,
+    clip: (typeof audioClips)[number],
+    edge: 'start' | 'end'
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rectangle = trackRef.current?.getBoundingClientRect()
+    if (!rectangle) return
+    checkpointHistory()
+    setActiveAudioClipId(clip.id)
+    const pointerStart = event.clientX
+    const originalStart = clip.startTimeSec
+    const originalDuration = clip.durationSec
+    const originalEnd = originalStart + originalDuration
+    const originalSourceStart = clip.sourceStartSec ?? 0
+    const sourceDuration = clip.sourceDurationSec
+    const candidates = snapCandidates.filter(
+      (candidate) =>
+        Math.abs(candidate - originalStart) > 1 / FPS &&
+        Math.abs(candidate - originalEnd) > 1 / FPS
+    )
+
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      const delta = ((moveEvent.clientX - pointerStart) / rectangle.width) * totalDuration
+      if (edge === 'start') {
+        const minimumStart = Math.max(0, originalStart - originalSourceStart)
+        const rawStart = clamp(
+          originalStart + delta,
+          minimumStart,
+          originalEnd - MIN_CLIP_DURATION
+        )
+        const snapped = moveEvent.altKey
+          ? { value: toFrame(rawStart), guide: null }
+          : snapValue(rawStart, rectangle.width, candidates)
+        const nextStart = clamp(
+          snapped.value,
+          minimumStart,
+          originalEnd - MIN_CLIP_DURATION
+        )
+        setSnapGuideSec(snapped.guide)
+        trimAudioClip(
+          clip.id,
+          nextStart,
+          originalEnd - nextStart,
+          Math.max(0, originalSourceStart + nextStart - originalStart)
+        )
+      } else {
+        const maximumDuration = sourceDuration
+          ? Math.max(MIN_CLIP_DURATION, sourceDuration - originalSourceStart)
+          : Number.POSITIVE_INFINITY
+        const rawEnd =
+          originalStart +
+          clamp(
+            originalDuration + delta,
+            MIN_CLIP_DURATION,
+            maximumDuration
+          )
+        const snapped = moveEvent.altKey
+          ? { value: toFrame(rawEnd), guide: null }
+          : snapValue(rawEnd, rectangle.width, candidates)
+        const nextEnd = clamp(
+          snapped.value,
+          originalStart + MIN_CLIP_DURATION,
+          originalStart + maximumDuration
+        )
+        setSnapGuideSec(snapped.guide)
+        trimAudioClip(
+          clip.id,
+          originalStart,
+          nextEnd - originalStart,
+          originalSourceStart
+        )
+      }
+    }
+    const onUp = () => {
+      setSnapGuideSec(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
@@ -222,7 +466,9 @@ export default function Timeline() {
   const dropTime = (clientX: number) => {
     const rectangle = trackRef.current?.getBoundingClientRect()
     if (!rectangle) return currentTimeSec
-    return clamp((clientX - rectangle.left) / rectangle.width, 0, 1) * totalDuration
+    const rawTime =
+      clamp((clientX - rectangle.left) / rectangle.width, 0, 1) * totalDuration
+    return snapValue(rawTime, rectangle.width).value
   }
 
   const activeScene = scenes.find((scene) => scene.id === activeSceneId)
@@ -263,12 +509,28 @@ export default function Timeline() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              const enabled = !snapEnabled
+              setSnapEnabled(enabled)
+              localStorage.setItem('rhymx.timelineSnap', String(enabled))
+            }}
+            className={`h-7 px-2 rounded-lg border flex items-center gap-1.5 text-[10px] ${
+              snapEnabled
+                ? 'border-violet-500/40 bg-violet-500/10 text-violet-300'
+                : 'border-white/5 bg-black/20 text-slate-600'
+            }`}
+            title="Snap playhead and clip edges (hold Alt to bypass)"
+          >
+            <Magnet className="h-3 w-3" />
+            Snap
+          </button>
           <div className="text-[10px] text-slate-500 font-mono">
             {formatTime(currentTimeSec)} / {formatTime(totalDuration)}
           </div>
           <div className="h-7 flex items-center gap-1 rounded-lg border border-white/5 bg-black/20 px-1.5">
             <button
-              onClick={() => setZoom((value) => Math.max(100, value - 25))}
+              onClick={() => setZoom((value) => Math.max(100, value - 50))}
               className="p-1 text-slate-500 hover:text-white"
               title="Zoom timeline out"
             >
@@ -277,20 +539,20 @@ export default function Timeline() {
             <input
               type="range"
               min="100"
-              max="400"
+              max="2000"
               step="25"
               value={zoom}
               onChange={(event) => setZoom(Number(event.target.value))}
               className="w-20 accent-violet-500"
             />
             <button
-              onClick={() => setZoom((value) => Math.min(400, value + 25))}
+              onClick={() => setZoom((value) => Math.min(2000, value + 50))}
               className="p-1 text-slate-500 hover:text-white"
               title="Zoom timeline in"
             >
               <Plus className="h-3 w-3" />
             </button>
-            <span className="w-8 text-[9px] text-slate-600 text-right">{zoom}%</span>
+            <span className="w-10 text-[9px] text-slate-600 text-right">{zoom}%</span>
           </div>
         </div>
       </div>
@@ -384,13 +646,13 @@ export default function Timeline() {
         <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden custom-scrollbar">
           <div style={{ width: `${zoom}%`, minWidth: '100%' }}>
             <div className="h-7 relative border-b border-white/5 bg-[#0d0f14]">
-              {Array.from({ length: 11 }, (_, index) => (
+              {Array.from({ length: rulerDivisions + 1 }, (_, index) => (
                 <div
                   key={index}
                   className="absolute top-0 bottom-0 border-l border-white/5 text-[9px] text-slate-600 pl-1 pt-1"
-                  style={{ left: `${index * 10}%` }}
+                  style={{ left: `${(index / rulerDivisions) * 100}%` }}
                 >
-                  {formatTime((totalDuration / 10) * index)}
+                  {formatTime((totalDuration / rulerDivisions) * index)}
                 </div>
               ))}
             </div>
@@ -401,13 +663,20 @@ export default function Timeline() {
               className="relative bg-[#0c0e13] cursor-ew-resize"
               style={{ height: bodyHeight }}
             >
-              {Array.from({ length: 11 }, (_, index) => (
+              {Array.from({ length: rulerDivisions + 1 }, (_, index) => (
                 <div
                   key={index}
                   className="absolute top-0 bottom-0 border-l border-white/[0.035]"
-                  style={{ left: `${index * 10}%` }}
+                  style={{ left: `${(index / rulerDivisions) * 100}%` }}
                 />
               ))}
+
+              {snapGuideSec !== null && (
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-cyan-300/90 z-40 pointer-events-none shadow-[0_0_8px_rgba(103,232,249,.7)]"
+                  style={{ left: left(snapGuideSec) }}
+                />
+              )}
 
               <div
                 onPointerDown={beginScrub}
@@ -546,7 +815,12 @@ export default function Timeline() {
                   <div
                     key={clip.id}
                     onPointerDown={(event) =>
-                      startAudioDrag(event, clip.id, clip.startTimeSec)
+                      startAudioDrag(
+                        event,
+                        clip.id,
+                        clip.startTimeSec,
+                        clip.durationSec
+                      )
                     }
                     className={`group absolute top-1 bottom-1 rounded px-2 flex items-center text-[9px] truncate pointer-events-auto cursor-grab active:cursor-grabbing ${
                       activeAudioClipId === clip.id
@@ -555,6 +829,24 @@ export default function Timeline() {
                     }`}
                     style={{ left: left(clip.startTimeSec), width: width(clip.durationSec) }}
                   >
+                    {activeAudioClipId === clip.id && (
+                      <>
+                        <div
+                          onPointerDown={(event) =>
+                            startAudioTrim(event, clip, 'start')
+                          }
+                          className="absolute left-0 top-0 bottom-0 w-2 bg-emerald-200 cursor-ew-resize z-30"
+                          title="Trim or extend clip head"
+                        />
+                        <div
+                          onPointerDown={(event) =>
+                            startAudioTrim(event, clip, 'end')
+                          }
+                          className="absolute right-0 top-0 bottom-0 w-2 bg-emerald-200 cursor-ew-resize z-30"
+                          title="Trim or extend clip tail"
+                        />
+                      </>
+                    )}
                     {clip.name}
                     <button
                       onPointerDown={(event) => event.stopPropagation()}

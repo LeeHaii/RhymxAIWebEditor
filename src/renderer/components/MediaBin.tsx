@@ -1,6 +1,6 @@
 import React, { DragEvent, useState } from 'react'
 import { FileAudio, Film, Image as ImageIcon, Music2, Plus, Trash2, Upload } from 'lucide-react'
-import { LibraryAsset, MediaKind } from '../../types/editor'
+import { ImportedFile, LibraryAsset, MediaKind } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
 
 type FileWithPath = File & { path?: string }
@@ -33,9 +33,19 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
   const [filter, setFilter] = useState<MediaFilter>('all')
   const [isDragging, setIsDragging] = useState(false)
 
-  const addFiles = (files: Array<{ path: string; name: string; kind: MediaKind }>) => {
+  const addFiles = async (files: ImportedFile[]) => {
+    const filesWithDuration = await Promise.all(
+      files.map(async (file) => ({
+        ...file,
+        durationSec:
+          file.durationSec ??
+          (file.kind === 'image'
+            ? undefined
+            : (await window.electronAPI.getMediaDuration(file.path)) || undefined),
+      }))
+    )
     addMediaAssets(
-      files.map((file) => ({
+      filesWithDuration.map((file) => ({
         ...file,
         id: crypto.randomUUID(),
       }))
@@ -44,7 +54,7 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
 
   const importFiles = async () => addFiles(await window.electronAPI.openMediaFiles())
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
     const files = Array.from(event.dataTransfer.files)
@@ -55,7 +65,7 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
           : null
       })
       .filter((file): file is NonNullable<typeof file> => Boolean(file))
-    addFiles(files)
+    await addFiles(files)
   }
 
   const visibleAssets = mediaLibrary.filter((asset) => {
@@ -77,6 +87,8 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
       sourceUrl: asset.path,
       thumbnailUrl: asset.path,
       title: asset.name,
+      sourceStartSec: 0,
+      sourceDurationSec: asset.durationSec,
       imageFit: 'cover',
       enableKenBurnsEffect: asset.kind === 'image',
     })

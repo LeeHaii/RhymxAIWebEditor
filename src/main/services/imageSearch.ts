@@ -24,41 +24,69 @@ export async function searchPexelsImages(
   }))
 }
 
-export async function searchGoogleImages(
-  query: string,
-  apiKey: string,
-  searchEngineId: string
+export async function searchDuckDuckGoImages(
+  query: string
 ): Promise<ImageSearchResult[]> {
-  if (!apiKey.trim() || !searchEngineId.trim()) {
-    throw new Error(
-      'Add both a Google Custom Search API key and Search Engine ID in Settings.'
-    )
-  }
-
+  const trimmedQuery = query.trim()
+  if (!trimmedQuery) return []
   try {
-    const response = await axios.get('https://customsearch.googleapis.com/customsearch/v1', {
+    const landing = await axios.get('https://duckduckgo.com/', {
+      params: { q: trimmedQuery, iax: 'images', ia: 'images' },
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      },
+      timeout: 15000,
+    })
+    const html = String(landing.data || '')
+    const vqd =
+      html.match(/vqd=["']([\d-]+)["']/)?.[1] ||
+      html.match(/vqd=([\d-]+)&/)?.[1] ||
+      html.match(/"vqd":"([\d-]+)"/)?.[1]
+    if (!vqd) {
+      throw new Error('DuckDuckGo did not return an image-search token.')
+    }
+
+    const cookie = (landing.headers['set-cookie'] || [])
+      .map((value: string) => value.split(';')[0])
+      .join('; ')
+    const response = await axios.get('https://duckduckgo.com/i.js', {
       params: {
-        q: query.trim(),
-        searchType: 'image',
-        num: 10,
-        safe: 'active',
-        key: apiKey.trim(),
-        cx: searchEngineId.trim(),
+        l: 'us-en',
+        o: 'json',
+        q: trimmedQuery,
+        vqd,
+        f: ',,,',
+        p: '1',
+      },
+      headers: {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        Referer: `https://duckduckgo.com/?q=${encodeURIComponent(trimmedQuery)}&iax=images&ia=images`,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+        ...(cookie ? { Cookie: cookie } : {}),
       },
       timeout: 15000,
     })
 
-    return (response.data.items || []).map((item: any, index: number) => ({
-      id: `google_image_${item.cacheId || index}_${encodeURIComponent(item.link)}`,
-      sourceUrl: item.link,
-      thumbnailUrl: item.image?.thumbnailLink || item.link,
-      title: item.title || item.displayLink || 'Google image',
-      source: 'google' as const,
+    return (response.data.results || []).slice(0, 24).map((item: any, index: number) => ({
+      id: `duckduckgo_image_${index}_${encodeURIComponent(item.image || item.url || '')}`,
+      sourceUrl: item.image || item.url,
+      thumbnailUrl: item.thumbnail || item.image || item.url,
+      title: item.title || item.source || 'DuckDuckGo image',
+      source: 'duckduckgo' as const,
     }))
   } catch (error: any) {
-    const apiMessage = error?.response?.data?.error?.message
+    const apiMessage =
+      error?.response?.data?.error?.message ||
+      (typeof error?.response?.data === 'string' &&
+      error.response.data.length < 300
+        ? error.response.data
+        : null)
     throw new Error(
-      apiMessage || 'Google Images search failed. Check the API key and Search Engine ID.'
+      apiMessage ||
+        error?.message ||
+        'DuckDuckGo image search was blocked. Its unofficial image endpoint may have changed.'
     )
   }
 }

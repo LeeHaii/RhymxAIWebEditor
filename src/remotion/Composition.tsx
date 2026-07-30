@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import {
   AbsoluteFill,
   Audio,
@@ -62,18 +62,22 @@ export const MainComposition: React.FC<{
   renderScale = 1,
 }) => {
   const { fps } = useVideoConfig()
-  const orderedScenes = [...scenes].sort((first, second) => {
-    const firstTrack = videoTracks.findIndex((track) => track.id === first.trackId)
-    const secondTrack = videoTracks.findIndex((track) => track.id === second.trackId)
-    const trackDifference =
-      (firstTrack < 0 ? 0 : firstTrack) - (secondTrack < 0 ? 0 : secondTrack)
-    return trackDifference || first.startTimeSec - second.startTimeSec
-  })
+  const orderedScenes = useMemo(
+    () =>
+      [...scenes].sort((first, second) => {
+        const firstTrack = videoTracks.findIndex((track) => track.id === first.trackId)
+        const secondTrack = videoTracks.findIndex((track) => track.id === second.trackId)
+        const trackDifference =
+          (firstTrack < 0 ? 0 : firstTrack) - (secondTrack < 0 ? 0 : secondTrack)
+        return trackDifference || first.startTimeSec - second.startTimeSec
+      }),
+    [scenes, videoTracks]
+  )
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#07080b' }}>
       {audioPath && voiceTrackSettings.visible && !voiceTrackSettings.muted && (
-        <Audio src={mediaSource(audioPath)} />
+        <Audio src={mediaSource(audioPath)} pauseWhenBuffering />
       )}
 
       {audioTrackSettings.visible &&
@@ -84,7 +88,12 @@ export const MainComposition: React.FC<{
             from={Math.round(clip.startTimeSec * fps)}
             durationInFrames={Math.max(1, Math.round(clip.durationSec * fps))}
           >
-            <Audio src={mediaSource(clip.path)} volume={clip.volume} />
+            <Audio
+              src={mediaSource(clip.path)}
+              volume={clip.volume}
+              trimBefore={Math.round((clip.sourceStartSec ?? 0) * fps)}
+              pauseWhenBuffering
+            />
           </Sequence>
         ))}
 
@@ -123,7 +132,7 @@ export const MainComposition: React.FC<{
   )
 }
 
-const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = ({
+const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = React.memo(({
   scene,
   trackMuted,
 }) => {
@@ -134,7 +143,9 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = ({
   let transform = 'none'
   if (
     media &&
-    (media.type === 'google_image' || media.type === 'local_image') &&
+    (media.type === 'google_image' ||
+      media.type === 'duckduckgo_image' ||
+      media.type === 'local_image') &&
     media.enableKenBurnsEffect
   ) {
     const durationFrames = Math.round(scene.durationSec * fps)
@@ -180,6 +191,8 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = ({
         <Video
           src={mediaSource(media.sourceUrl)}
           volume={trackMuted ? 0 : (scene.volume ?? 1)}
+          trimBefore={Math.round((media.sourceStartSec ?? 0) * fps)}
+          pauseWhenBuffering
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
@@ -197,7 +210,7 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = ({
       )}
     </AbsoluteFill>
   )
-}
+})
 
 const SubtitleContent: React.FC<{
   subtitle: SubtitleSegment

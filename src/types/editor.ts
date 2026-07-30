@@ -8,6 +8,7 @@ export interface MediaAsset {
     | 'pexels_video'
     | 'youtube_clip'
     | 'google_image'
+    | 'duckduckgo_image'
     | 'local_video'
     | 'local_image'
   kind?: MediaKind
@@ -15,6 +16,8 @@ export interface MediaAsset {
   thumbnailUrl: string
   title: string
   durationSec?: number
+  sourceStartSec?: number
+  sourceDurationSec?: number
   imageFit?: 'cover' | 'contain'
   enableKenBurnsEffect?: boolean
 }
@@ -34,6 +37,8 @@ export interface TimelineAudioClip {
   kind: 'music' | 'sfx'
   startTimeSec: number
   durationSec: number
+  sourceStartSec?: number
+  sourceDurationSec?: number
   volume: number
 }
 
@@ -114,6 +119,7 @@ export interface ImportedFile {
   path: string
   name: string
   kind: MediaKind
+  durationSec?: number
 }
 
 export interface ImageSearchResult {
@@ -121,7 +127,7 @@ export interface ImageSearchResult {
   sourceUrl: string
   thumbnailUrl: string
   title: string
-  source: 'google' | 'pexels' | 'wikimedia'
+  source: 'duckduckgo' | 'pexels' | 'wikimedia'
 }
 
 export interface YouTubeSearchResult {
@@ -160,17 +166,14 @@ export interface ExportVideoRequest {
 export interface ElectronAPI {
   openAudioFile: () => Promise<{ path: string; duration: number } | null>
   openMediaFiles: () => Promise<ImportedFile[]>
+  getMediaDuration: (filePath: string) => Promise<number | null>
   transcribeAudio: (filePath: string, apiKey: string) => Promise<SceneSegment[]>
   listProjects: () => Promise<ProjectSummary[]>
   loadProject: (projectId: string) => Promise<ProjectDocument>
   saveProject: (project: ProjectDocument) => Promise<void>
   trimYouTube: (url: string, startTime: number, endTime: number) => Promise<string>
   searchImages: (query: string, pexelsKey?: string) => Promise<ImageSearchResult[]>
-  searchGoogleImages: (
-    query: string,
-    apiKey: string,
-    searchEngineId: string
-  ) => Promise<ImageSearchResult[]>
+  searchDuckDuckGoImages: (query: string) => Promise<ImageSearchResult[]>
   searchYouTube: (query: string, apiKey: string) => Promise<YouTubeSearchResult[]>
   chooseExportPath: (defaultName: string) => Promise<string | null>
   getEncoderCapabilities: () => Promise<EncoderCapabilities>
@@ -183,10 +186,6 @@ export interface ElectronAPI {
   setGeminiKey: (key: string) => Promise<void>
   getYouTubeKey: () => Promise<string | null>
   setYouTubeKey: (key: string) => Promise<void>
-  getGoogleSearchKey: () => Promise<string | null>
-  setGoogleSearchKey: (key: string) => Promise<void>
-  getGoogleSearchCx: () => Promise<string | null>
-  setGoogleSearchCx: (value: string) => Promise<void>
 }
 
 declare global {
