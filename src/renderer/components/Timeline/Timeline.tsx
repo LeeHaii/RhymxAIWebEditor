@@ -1,4 +1,11 @@
-import React, { PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  PointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   Captions,
@@ -18,6 +25,14 @@ import {
 } from 'lucide-react'
 import { LibraryAsset, SceneSegment } from '../../../types/editor'
 import { useEditorStore } from '../../../store/useEditorStore'
+import { TimelineIndex } from '../../../core/timeline/TimelineIndex'
+import {
+  beginScrub as beginPreviewScrub,
+  endScrub,
+  getScrubSnapshot,
+  subscribeToScrub,
+  updateScrub,
+} from '../../playback/scrubController'
 
 const VOICE_HEIGHT = 36
 const VIDEO_HEIGHT = 54
@@ -25,6 +40,9 @@ const TEXT_HEIGHT = 40
 const AUDIO_HEIGHT = 40
 const FPS = 30
 const MIN_CLIP_DURATION = 1 / FPS
+const PLAYHEAD_SNAP_PIXELS = 8
+const MAX_PLAYHEAD_SNAP_SEC = 0.25
+const MAX_DENSE_SUBTITLE_BOUNDARIES = 4
 
 function formatTime(seconds: number) {
   const safe = Math.max(0, seconds)
@@ -37,8 +55,18 @@ const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value))
 const toFrame = (seconds: number) => Math.round(seconds * FPS) / FPS
 
-function TimelineClock({ totalDuration }: { totalDuration: number }) {
+function useDisplayedTime() {
   const currentTimeSec = useEditorStore((state) => state.currentTimeSec)
+  const scrub = useSyncExternalStore(
+    subscribeToScrub,
+    getScrubSnapshot,
+    getScrubSnapshot
+  )
+  return scrub.active ? scrub.timeSec : currentTimeSec
+}
+
+function TimelineClock({ totalDuration }: { totalDuration: number }) {
+  const currentTimeSec = useDisplayedTime()
   return (
     <div className="text-[10px] text-slate-500 font-mono">
       {formatTime(currentTimeSec)} / {formatTime(totalDuration)}
@@ -53,7 +81,7 @@ function TimelinePlayhead({
   totalDuration: number
   onPointerDown: (event: PointerEvent<HTMLElement>) => void
 }) {
-  const currentTimeSec = useEditorStore((state) => state.currentTimeSec)
+  const currentTimeSec = useDisplayedTime()
   return (
     <div
       onPointerDown={onPointerDown}
@@ -113,6 +141,7 @@ export default function Timeline() {
     setActiveSubtitleId,
     audioFile,
     requestSeek,
+    setCurrentTimeSec,
     trimScene,
     checkpointHistory,
     deleteScene,
@@ -143,6 +172,7 @@ export default function Timeline() {
       setActiveSubtitleId: state.setActiveSubtitleId,
       audioFile: state.audioFile,
       requestSeek: state.requestSeek,
+      setCurrentTimeSec: state.setCurrentTimeSec,
       trimScene: state.trimScene,
       checkpointHistory: state.checkpointHistory,
       deleteScene: state.deleteScene,
@@ -160,6 +190,7 @@ export default function Timeline() {
     }))
   )
   const trackRef = useRef<HTMLDivElement>(null)
+  const scrubCleanupRef = useRef<(() => void) | null>(null)
   const [zoom, setZoom] = useState(() => {
     const savedZoom = Number(localStorage.getItem('rhymx.timelineZoom') || 100)
     return Number.isFinite(savedZoom) ? clamp(savedZoom, 100, 2000) : 100
@@ -172,6 +203,15 @@ export default function Timeline() {
   useEffect(() => {
     localStorage.setItem('rhymx.timelineZoom', String(zoom))
   }, [zoom])
+
+  useEffect(
+    () => () => {
+      scrubCleanupRef.current?.()
+      const scrub = getScrubSnapshot()
+      if (scrub.active) endScrub(scrub.timeSec)
+    },
+    []
+  )
 
   useEffect(() => {
     const onTimelineZoom = (event: Event) => {
@@ -229,6 +269,45 @@ export default function Timeline() {
     [scenes, subtitles, audioClips]
   )
 
+  const sceneIndex = useMemo(
+    () =>
+      new TimelineIndex(
+        scenes.map((scene) => ({
+          id: scene.id,
+          start: scene.startTimeSec,
+          end: scene.endTimeSec,
+          value: scene,
+        }))
+      ),
+    [scenes]
+  )
+
+  const audioIndex = useMemo(
+    () =>
+      new TimelineIndex(
+        audioClips.map((clip) => ({
+          id: clip.id,
+          start: clip.startTimeSec,
+          end: clip.startTimeSec + clip.durationSec,
+          value: clip,
+        }))
+      ),
+    [audioClips]
+  )
+
+  const subtitleIndex = useMemo(
+    () =>
+      new TimelineIndex(
+        subtitles.map((subtitle) => ({
+          id: subtitle.id,
+          start: subtitle.startTimeSec,
+          end: subtitle.endTimeSec,
+          value: subtitle,
+        }))
+      ),
+    [subtitles]
+  )
+
   const snapValue = (
     value: number,
     rectangleWidth: number,
@@ -277,32 +356,110 @@ export default function Timeline() {
     }
   }
 
-  const seekAtClientX = (clientX: number, disableSnap = false) => {
+  const playheadTimeAtClientX = (
+    clientX: number,
+    disableSnap = false,
+    includeSecondaryBoundaries = false
+  ) => {
     const rectangle = trackRef.current?.getBoundingClientRect()
-    if (!rectangle) return
+    if (!rectangle) return null
     const ratio = clamp((clientX - rectangle.left) / rectangle.width, 0, 1)
     const rawTime = ratio * totalDuration
-    const snapped = disableSnap
-      ? { value: toFrame(rawTime), guide: null }
-      : snapValue(rawTime, rectangle.width)
-    setSnapGuideSec(snapped.guide)
-    requestSeek(snapped.value)
+    if (disableSnap || !snapEnabled) {
+      return { value: toFrame(rawTime), guide: null as number | null }
+    }
+
+    const threshold = Math.min(
+      MAX_PLAYHEAD_SNAP_SEC,
+      (PLAYHEAD_SNAP_PIXELS / Math.max(1, rectangle.width)) * totalDuration
+    )
+    const edge =
+      rawTime <= threshold
+        ? 0
+        : totalDuration - rawTime <= threshold
+          ? totalDuration
+          : null
+    const sceneBoundary = sceneIndex.nearestBoundary(rawTime, threshold)
+    const primaryBoundary = sceneBoundary ?? edge
+    if (primaryBoundary !== null) {
+      return { value: primaryBoundary, guide: primaryBoundary }
+    }
+
+    if (includeSecondaryBoundaries) {
+      const audioBoundary = audioIndex.nearestBoundary(rawTime, threshold)
+      if (audioBoundary !== null) {
+        return { value: audioBoundary, guide: audioBoundary }
+      }
+
+      const subtitleDensity = subtitleIndex.countBoundariesInRange(
+        rawTime - threshold,
+        rawTime + threshold
+      )
+      if (subtitleDensity <= MAX_DENSE_SUBTITLE_BOUNDARIES) {
+        const subtitleBoundary = subtitleIndex.nearestBoundary(rawTime, threshold)
+        if (subtitleBoundary !== null) {
+          return { value: subtitleBoundary, guide: subtitleBoundary }
+        }
+      }
+    }
+
+    return { value: toFrame(rawTime), guide: null as number | null }
+  }
+
+  const seekAtClientX = (clientX: number, disableSnap = false) => {
+    const target = playheadTimeAtClientX(clientX, disableSnap, true)
+    if (!target) return
+    setSnapGuideSec(target.guide)
+    requestSeek(target.value)
   }
 
   const beginScrub = (event: PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
-    seekAtClientX(event.clientX, event.altKey)
-    const onMove = (moveEvent: globalThis.PointerEvent) =>
-      seekAtClientX(moveEvent.clientX, moveEvent.altKey)
-    const onUp = () => {
-      setSnapGuideSec(null)
+    const initialTarget = playheadTimeAtClientX(event.clientX, event.altKey)
+    if (!initialTarget) return
+    setSnapGuideSec(initialTarget.guide)
+    beginPreviewScrub(initialTarget.value)
+
+    let latestClientX = event.clientX
+    let latestAltKey = event.altKey
+    let animationFrame: number | null = null
+    const cleanup = () => {
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame)
+      animationFrame = null
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      if (scrubCleanupRef.current === cleanup) scrubCleanupRef.current = null
     }
+    const publishLatest = () => {
+      animationFrame = null
+      const target = playheadTimeAtClientX(latestClientX, latestAltKey)
+      if (!target) return
+      setSnapGuideSec(target.guide)
+      updateScrub(target.value)
+    }
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      latestClientX = moveEvent.clientX
+      latestAltKey = moveEvent.altKey
+      if (animationFrame === null) {
+        animationFrame = requestAnimationFrame(publishLatest)
+      }
+    }
+    const onUp = (upEvent: globalThis.PointerEvent) => {
+      cleanup()
+      const target = playheadTimeAtClientX(upEvent.clientX, upEvent.altKey, true)
+      const finalTime = target?.value ?? getScrubSnapshot().timeSec
+      setCurrentTimeSec(finalTime)
+      endScrub(finalTime)
+      setSnapGuideSec(null)
+    }
+    scrubCleanupRef.current?.()
+    scrubCleanupRef.current = cleanup
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const startTrim = (

@@ -4,6 +4,7 @@ import {
   PexelsAutoMatchResult,
   SceneSegment,
 } from '../../types/editor'
+import { selectPexelsVideoSources } from '../../core/media/pexelsVideoFiles'
 
 type PexelsVideoFile = {
   id: number
@@ -89,24 +90,9 @@ function sceneQueries(scene: SceneSegment) {
   ).slice(0, 3)
 }
 
-function bestVideoFile(video: PexelsVideo) {
-  const files = (video.video_files || []).filter(
-    (file) =>
-      file.file_type === 'video/mp4' &&
-      Boolean(file.link) &&
-      Boolean(file.width) &&
-      Boolean(file.height)
-  )
-  return (
-    files
-      .filter((file) => (file.width || 0) <= 1920)
-      .sort((first, second) => (second.width || 0) - (first.width || 0))[0] ||
-    files.sort((first, second) => (first.width || 0) - (second.width || 0))[0]
-  )
-}
-
 function videoScore(video: PexelsVideo, sceneDuration: number, used: Set<number>) {
-  const file = bestVideoFile(video)
+  const sources = selectPexelsVideoSources(video.video_files)
+  const file = video.video_files?.find((candidate) => candidate.link === sources.sourceUrl)
   if (!file || video.duration + 0.05 < sceneDuration) return Number.NEGATIVE_INFINITY
   const ratio = (file.width || video.width) / Math.max(1, file.height || video.height)
   const aspectScore = 30 - Math.abs(16 / 9 - ratio) * 30
@@ -181,18 +167,25 @@ export async function autoMatchPexelsVideos(
               }))
               .filter((candidate) => Number.isFinite(candidate.score))
               .sort((first, second) => second.score - first.score)[0]?.video
-            file = selected ? bestVideoFile(selected) : undefined
+            const sourceUrl = selected
+              ? selectPexelsVideoSources(selected.video_files).sourceUrl
+              : ''
+            file = selected?.video_files?.find(
+              (candidate) => candidate.link === sourceUrl
+            )
             if (selected && file) break
           }
 
           if (selected && file) {
             usedVideoIds.add(selected.id)
             const creatorName = selected.user?.name || 'Pexels contributor'
+            const sources = selectPexelsVideoSources(selected.video_files)
             scene.media = {
               id: `pexels_auto_${selected.id}_${scene.id}`,
               type: 'pexels_video',
               kind: 'video',
-              sourceUrl: file.link,
+              sourceUrl: sources.sourceUrl,
+              previewSourceUrl: sources.previewSourceUrl,
               thumbnailUrl: selected.image,
               title: `Video by ${creatorName} on Pexels`,
               sourceStartSec: 0,

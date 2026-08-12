@@ -1,13 +1,14 @@
 import React, { useMemo } from 'react'
 import {
   AbsoluteFill,
+  Html5Video,
   Img,
   interpolate,
   Sequence,
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion'
-import { Audio, Video } from '@remotion/media'
+import { Audio, Video as ExportVideo } from '@remotion/media'
 import { resolveMediaUrl } from '../platform/web/browserAssets'
 import {
   SceneSegment,
@@ -35,6 +36,8 @@ const defaultSubtitleSettings: SubtitleSettings = {
 
 const defaultTrackSettings: TrackSettings = { muted: false, visible: true }
 
+export type CompositionMediaMode = 'preview' | 'export'
+
 function mediaSource(source: string) {
   return resolveMediaUrl(source)
 }
@@ -49,6 +52,7 @@ export const MainComposition: React.FC<{
   voiceTrackSettings?: TrackSettings
   audioTrackSettings?: TrackSettings
   renderScale?: number
+  mediaMode?: CompositionMediaMode
 }> = ({
   scenes,
   subtitles = [],
@@ -59,6 +63,7 @@ export const MainComposition: React.FC<{
   voiceTrackSettings = defaultTrackSettings,
   audioTrackSettings = defaultTrackSettings,
   renderScale = 1,
+  mediaMode = 'export',
 }) => {
   const { fps } = useVideoConfig()
   const orderedScenes = useMemo(
@@ -100,18 +105,20 @@ export const MainComposition: React.FC<{
       {orderedScenes.map((scene) => {
         const track = videoTracks.find((item) => item.id === scene.trackId)
         if (track && !track.visible) return null
+        const isPreview = mediaMode === 'preview'
         return (
           <Sequence
             key={scene.id}
             from={Math.round(scene.startTimeSec * fps)}
             durationInFrames={Math.max(1, Math.round(scene.durationSec * fps))}
-            premountFor={fps}
-            postmountFor={Math.round(fps / 2)}
+            premountFor={isPreview ? Math.round(fps / 4) : fps}
+            postmountFor={isPreview ? 0 : Math.round(fps / 2)}
           >
             <SceneContent
               key={`${scene.media?.sourceUrl || 'empty'}:${scene.media?.sourceStartSec || 0}`}
               scene={scene}
               trackMuted={track?.muted || false}
+              mediaMode={mediaMode}
             />
           </Sequence>
         )
@@ -138,10 +145,11 @@ export const MainComposition: React.FC<{
   )
 }
 
-const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = React.memo(({
-  scene,
-  trackMuted,
-}) => {
+const SceneContent: React.FC<{
+  scene: SceneSegment
+  trackMuted: boolean
+  mediaMode: CompositionMediaMode
+}> = React.memo(({ scene, trackMuted, mediaMode }) => {
   const { fps } = useVideoConfig()
   const frame = useCurrentFrame()
   const media = scene.media
@@ -165,6 +173,10 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = Rea
     media?.type === 'pexels_video' ||
     media?.type === 'youtube_clip' ||
     media?.type === 'local_video'
+  const videoSource =
+    mediaMode === 'preview' && media?.previewSourceUrl
+      ? media.previewSourceUrl
+      : media?.sourceUrl
 
   return (
     <AbsoluteFill
@@ -212,12 +224,23 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = Rea
           </div>
         </AbsoluteFill>
       ) : isVideo ? (
-        <Video
-          src={mediaSource(media.sourceUrl)}
-          volume={trackMuted ? 0 : (scene.volume ?? 1)}
-          trimBefore={Math.round((media.sourceStartSec ?? 0) * fps)}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        />
+        mediaMode === 'preview' ? (
+          <Html5Video
+            src={mediaSource(videoSource || media.sourceUrl)}
+            volume={trackMuted ? 0 : (scene.volume ?? 1)}
+            trimBefore={Math.round((media.sourceStartSec ?? 0) * fps)}
+            preload="auto"
+            pauseWhenBuffering
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <ExportVideo
+            src={mediaSource(media.sourceUrl)}
+            volume={trackMuted ? 0 : (scene.volume ?? 1)}
+            trimBefore={Math.round((media.sourceStartSec ?? 0) * fps)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        )
       ) : (
         <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <Img

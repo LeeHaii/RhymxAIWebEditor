@@ -4,6 +4,10 @@ import { Player, PlayerRef } from '@remotion/player'
 import { MainComposition } from '../../remotion/Composition'
 import { useEditorStore } from '../../store/useEditorStore'
 import { SceneSegment } from '../../types/editor'
+import {
+  getScrubSnapshot,
+  subscribeToScrub,
+} from '../playback/scrubController'
 
 const QUALITY_SIZES = {
   low: { width: 640, height: 360 },
@@ -12,11 +16,14 @@ const QUALITY_SIZES = {
   ultra: { width: 3840, height: 2160 },
 } as const
 
+const CLOCK_UPDATE_INTERVAL_MS = 100
+const SCRUB_PREVIEW_INTERVAL_MS = 1000 / 12
+
 const mediaSignature = (scene: SceneSegment) =>
   scene.media
     ? `${scene.media.type}\u0000${scene.media.sourceUrl}\u0000${
-        scene.media.sourceStartSec ?? 0
-      }`
+        scene.media.previewSourceUrl || ''
+      }\u0000${scene.media.sourceStartSec ?? 0}`
     : ''
 
 const isVideoScene = (scene: SceneSegment) =>
@@ -77,6 +84,7 @@ export default function PlayerCanvas() {
   const setIsPlaying = useEditorStore((state) => state.setIsPlaying)
   const playerRef = useRef<PlayerRef>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const scenesRef = useRef(scenes)
   const previousMediaRef = useRef<Map<string, string> | null>(null)
   const mediaRefreshVersionRef = useRef(0)
   const [zoom, setZoom] = useState<'fit' | number>('fit')
@@ -91,6 +99,7 @@ export default function PlayerCanvas() {
         | 'ultra') || 'medium'
   )
   const qualitySize = QUALITY_SIZES[quality]
+  scenesRef.current = scenes
 
   const totalDurationSec = useMemo(() => {
     const sceneEnd = scenes.reduce((max, scene) => Math.max(max, scene.endTimeSec), 0)
@@ -111,6 +120,7 @@ export default function PlayerCanvas() {
       videoTracks,
       voiceTrackSettings,
       audioTrackSettings,
+      mediaMode: 'preview' as const,
       renderScale: qualitySize.width / 1920,
       subtitles,
       audioPath: audioFile?.path || '',
@@ -151,9 +161,22 @@ export default function PlayerCanvas() {
   useEffect(() => {
     const player = playerRef.current
     if (!player) return
-    const syncFrame = () => setCurrentTimeSec(player.getCurrentFrame() / 30)
+    let lastClockUpdate = 0
+    const syncFrame = () => {
+      if (getScrubSnapshot().active) return
+      lastClockUpdate = performance.now()
+      setCurrentTimeSec(player.getCurrentFrame() / 30)
+    }
+    const onFrameUpdate = () => {
+      const now = performance.now()
+      if (now - lastClockUpdate < CLOCK_UPDATE_INTERVAL_MS) return
+      syncFrame()
+    }
     const onPlay = () => setIsPlaying(true)
-    const onPause = () => setIsPlaying(false)
+    const onPause = () => {
+      syncFrame()
+      setIsPlaying(false)
+    }
     const onEnded = () => {
       syncFrame()
       setIsPlaying(false)
@@ -161,13 +184,13 @@ export default function PlayerCanvas() {
 
     syncFrame()
     setIsPlaying(player.isPlaying())
-    player.addEventListener('frameupdate', syncFrame)
+    player.addEventListener('frameupdate', onFrameUpdate)
     player.addEventListener('seeked', syncFrame)
     player.addEventListener('play', onPlay)
     player.addEventListener('pause', onPause)
     player.addEventListener('ended', onEnded)
     return () => {
-      player.removeEventListener('frameupdate', syncFrame)
+      player.removeEventListener('frameupdate', onFrameUpdate)
       player.removeEventListener('seeked', syncFrame)
       player.removeEventListener('play', onPlay)
       player.removeEventListener('pause', onPause)
@@ -233,6 +256,114 @@ export default function PlayerCanvas() {
   useEffect(() => {
     const player = playerRef.current
     if (!player) return
+
+    let scrubbing = false
+    let latestFrame = 0
+    let lastPreviewSeekAt = Number.NEGATIVE_INFINITY
+    let previewTimer: ReturnType<typeof setTimeout> | null = null
+    let resumePlayback = false
+    let restoreMuted = false
+    let disposed = false
+    let scrubGeneration = 0
+
+    const clearPreviewTimer = () => {
+      if (previewTimer === null) return
+      clearTimeout(previewTimer)
+      previewTimer = null
+    }
+
+    const seekToLatestPreview = () => {
+      previewTimer = null
+      if (!scrubbing) return
+      const elapsed = performance.now() - lastPreviewSeekAt
+      if (elapsed < SCRUB_PREVIEW_INTERVAL_MS) {
+        previewTimer = setTimeout(
+          seekToLatestPreview,
+          SCRUB_PREVIEW_INTERVAL_MS - elapsed
+        )
+        return
+      }
+      player.seekTo(latestFrame)
+      lastPreviewSeekAt = performance.now()
+    }
+
+    const schedulePreviewSeek = () => {
+      if (previewTimer !== null) return
+      const elapsed = performance.now() - lastPreviewSeekAt
+      if (elapsed >= SCRUB_PREVIEW_INTERVAL_MS) seekToLatestPreview()
+      else {
+        previewTimer = setTimeout(
+          seekToLatestPreview,
+          SCRUB_PREVIEW_INTERVAL_MS - elapsed
+        )
+      }
+    }
+
+    const onScrubChange = () => {
+      const scrub = getScrubSnapshot()
+      latestFrame = Math.round(scrub.timeSec * 30)
+
+      if (scrub.active) {
+        if (!scrubbing) {
+          scrubbing = true
+          scrubGeneration += 1
+          resumePlayback = resumePlayback || player.isPlaying()
+          restoreMuted = !player.isMuted()
+          player.pause()
+          if (restoreMuted) player.mute()
+          lastPreviewSeekAt = Number.NEGATIVE_INFINITY
+        }
+        schedulePreviewSeek()
+        return
+      }
+
+      if (!scrubbing) return
+      scrubbing = false
+      clearPreviewTimer()
+      player.seekTo(latestFrame)
+      if (restoreMuted) player.unmute()
+      if (resumePlayback) {
+        const resumeFrame = latestFrame
+        const releaseGeneration = scrubGeneration
+        void (async () => {
+          const currentTime = resumeFrame / 30
+          const activeScenes = scenesRef.current.filter(
+            (scene) =>
+              currentTime >= scene.startTimeSec && currentTime < scene.endTimeSec
+          )
+          await Promise.all(
+            activeScenes
+              .filter((scene) => scene.media && !scene.media.missing)
+              .map((scene) =>
+              waitForSceneMedia(player.getContainerNode(), scene, 1000)
+              )
+          )
+          if (
+            !disposed &&
+            !getScrubSnapshot().active &&
+            scrubGeneration === releaseGeneration &&
+            player.getCurrentFrame() === resumeFrame
+          ) {
+            resumePlayback = false
+            player.play()
+          }
+        })()
+      }
+    }
+
+    const unsubscribe = subscribeToScrub(onScrubChange)
+    onScrubChange()
+    return () => {
+      disposed = true
+      unsubscribe()
+      clearPreviewTimer()
+      if (restoreMuted) player.unmute()
+    }
+  }, [])
+
+  useEffect(() => {
+    const player = playerRef.current
+    if (!player) return
     if (playbackCommand === 'play') player.play()
     else if (playbackCommand === 'pause') player.pause()
     else if (player.isPlaying()) player.pause()
@@ -249,7 +380,7 @@ export default function PlayerCanvas() {
               setQuality(event.target.value as 'low' | 'medium' | 'high' | 'ultra')
             }
             className="bg-transparent border-r border-white/10 pr-1 text-[10px] text-slate-400 outline-none capitalize"
-            title="Preview render quality"
+            title="Preview canvas quality (source video decoding is unchanged)"
           >
             {(['low', 'medium', 'high', 'ultra'] as const).map((value) => (
               <option key={value} value={value} className="bg-[#14161d]">

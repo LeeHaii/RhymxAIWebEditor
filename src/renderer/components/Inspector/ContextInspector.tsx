@@ -13,6 +13,7 @@ import {
   Youtube,
 } from 'lucide-react'
 import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
+import { selectPexelsVideoSources } from '../../../core/media/pexelsVideoFiles'
 import { useEditorStore } from '../../../store/useEditorStore'
 import {
   formatTimecode,
@@ -210,22 +211,15 @@ export default function ContextInspector() {
     })
   }
 
-  const pexelsVideoUrl = (video: any) =>
-    video?.video_files?.find(
-      (item: any) => item.quality === 'hd' && item.width && item.width <= 1920
-    )?.link ||
-    video?.video_files?.find((item: any) => item.quality === 'hd')?.link ||
-    video?.video_files?.[0]?.link ||
-    ''
-
   const applyPexels = (video: any) => {
     if (!activeSceneId) return
-    const sourceUrl = pexelsVideoUrl(video)
-    if (!sourceUrl) return
+    const sources = selectPexelsVideoSources(video?.video_files)
+    if (!sources.sourceUrl) return
     assignMediaToScene(activeSceneId, {
       id: `pex_${video.id}`,
       type: 'pexels_video',
-      sourceUrl,
+      sourceUrl: sources.sourceUrl,
+      previewSourceUrl: sources.previewSourceUrl,
       thumbnailUrl: video.image,
       title: video.user?.name || video.url,
       sourceStartSec: 0,
@@ -484,7 +478,10 @@ export default function ContextInspector() {
                 {activeTab === 'pexels-video' && selectedPexels && (
                   <div className="rounded-lg overflow-hidden border border-violet-500/40 bg-black/30">
                     <video
-                      src={pexelsVideoUrl(selectedPexels)}
+                      src={
+                        selectPexelsVideoSources(selectedPexels.video_files)
+                          .previewSourceUrl
+                      }
                       poster={selectedPexels.image}
                       controls
                       className="w-full aspect-video bg-black"

@@ -16,6 +16,7 @@ export const Root: React.FC = () => {
           videoTracks: [],
           voiceTrackSettings: { muted: false, visible: true },
           audioTrackSettings: { muted: false, visible: true },
+          mediaMode: 'export' as const,
           renderScale: 1,
           subtitles: [],
           audioPath: '',

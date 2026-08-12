@@ -18,6 +18,7 @@ import {
   YouTubeSearchResult,
 } from '../../types/editor'
 import { MainComposition } from '../../remotion/Composition'
+import { selectPexelsVideoSources } from '../../core/media/pexelsVideoFiles'
 import {
   fileForSource,
   hydrateMediaSources,
@@ -60,6 +61,7 @@ function projectSources(project: ProjectDocument) {
     ...project.mediaLibrary.map((asset) => asset.path),
     ...project.audioClips.map((clip) => clip.path),
     ...project.scenes.map((scene) => scene.media?.sourceUrl),
+    ...project.scenes.map((scene) => scene.media?.previewSourceUrl),
   ].filter((source): source is string => Boolean(source))
 }
 
@@ -312,17 +314,16 @@ async function autoMatchPexelsVideos(scenes: SceneSegment[], apiKey: string): Pr
     try {
       const result = await pexelsVideos(query, apiKey)
       const video = result.videos?.[0]
-      const file = video?.video_files
-        ?.filter((item) => item.file_type === 'video/mp4')
-        .sort((a, b) => Math.abs((a.width || 1280) - 1280) - Math.abs((b.width || 1280) - 1280))[0]
-      if (video && file) {
+      const sources = selectPexelsVideoSources(video?.video_files)
+      if (video && sources.sourceUrl) {
         matched += 1
         output.push({
           ...scene,
           media: {
             id: `pexels_${video.id}`,
             type: 'pexels_video',
-            sourceUrl: file.link,
+            sourceUrl: sources.sourceUrl,
+            previewSourceUrl: sources.previewSourceUrl,
             thumbnailUrl: video.image || '',
             title: query,
             durationSec: video.duration,
@@ -455,6 +456,7 @@ async function exportVideo(request: ExportVideoRequest) {
         videoTracks: request.videoTracks,
         voiceTrackSettings: request.voiceTrackSettings,
         audioTrackSettings: request.audioTrackSettings,
+        mediaMode: 'export' as const,
         renderScale: request.width / 1920,
       },
     },
@@ -467,6 +469,7 @@ async function exportVideo(request: ExportVideoRequest) {
       videoTracks: request.videoTracks,
       voiceTrackSettings: request.voiceTrackSettings,
       audioTrackSettings: request.audioTrackSettings,
+      mediaMode: 'export' as const,
       renderScale: request.width / 1920,
     },
     videoBitrate: Number.parseInt(request.videoBitrate) * 1_000_000,

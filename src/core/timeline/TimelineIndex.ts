@@ -7,11 +7,37 @@ export type TimelineInterval<T> = {
 
 export class TimelineIndex<T> {
   readonly intervals: TimelineInterval<T>[]
+  readonly boundaries: number[]
 
   constructor(intervals: TimelineInterval<T>[]) {
     this.intervals = [...intervals].sort(
       (first, second) => first.start - second.start || first.end - second.end
     )
+    this.boundaries = Array.from(
+      new Set(this.intervals.flatMap((interval) => [interval.start, interval.end]))
+    ).sort((first, second) => first - second)
+  }
+
+  private firstBoundaryAtOrAfter(time: number) {
+    let left = 0
+    let right = this.boundaries.length
+    while (left < right) {
+      const middle = (left + right) >>> 1
+      if (this.boundaries[middle] < time) left = middle + 1
+      else right = middle
+    }
+    return left
+  }
+
+  private firstBoundaryAfter(time: number) {
+    let left = 0
+    let right = this.boundaries.length
+    while (left < right) {
+      const middle = (left + right) >>> 1
+      if (this.boundaries[middle] <= time) left = middle + 1
+      else right = middle
+    }
+    return left
   }
 
   queryRange(start: number, end: number, overscan = 0) {
@@ -36,15 +62,22 @@ export class TimelineIndex<T> {
   }
 
   nearestBoundary(time: number, threshold: number) {
-    const boundaries = this.intervals.flatMap((interval) => [interval.start, interval.end])
+    const insertion = this.firstBoundaryAtOrAfter(time)
     let nearest: number | null = null
-    for (const boundary of boundaries) {
+    for (const index of [insertion - 1, insertion]) {
+      const boundary = this.boundaries[index]
+      if (boundary === undefined) continue
       if (Math.abs(boundary - time) <= threshold &&
           (nearest === null || Math.abs(boundary - time) < Math.abs(nearest - time))) {
         nearest = boundary
       }
     }
     return nearest
+  }
+  countBoundariesInRange(start: number, end: number) {
+    const first = this.firstBoundaryAtOrAfter(start)
+    const afterLast = this.firstBoundaryAfter(end)
+    return Math.max(0, afterLast - first)
   }
 }
 

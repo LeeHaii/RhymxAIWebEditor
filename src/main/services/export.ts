@@ -82,6 +82,7 @@ export async function exportVideo(
       videoTracks: request.videoTracks,
       voiceTrackSettings: request.voiceTrackSettings,
       audioTrackSettings: request.audioTrackSettings,
+      mediaMode: 'export' as const,
     }
 
     const bundled = await getBundledComposition()

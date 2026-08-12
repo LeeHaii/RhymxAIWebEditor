@@ -13,6 +13,7 @@ export interface MediaAsset {
     | 'local_image'
   kind?: MediaKind
   sourceUrl: string
+  previewSourceUrl?: string
   thumbnailUrl: string
   title: string
   durationSec?: number
