@@ -27,9 +27,7 @@ const mediaSignature = (scene: SceneSegment) =>
     : ''
 
 const isVideoScene = (scene: SceneSegment) =>
-  scene.media?.type === 'pexels_video' ||
-  scene.media?.type === 'youtube_clip' ||
-  scene.media?.type === 'local_video'
+  scene.media?.type === 'remote_video' || scene.media?.type === 'local_video'
 
 const nextPaint = () =>
   new Promise<void>((resolve) =>

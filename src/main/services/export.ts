@@ -48,7 +48,8 @@ export async function exportVideo(
     throw new Error('Another export is already running.')
   }
   const missingYouTubeScene = request.scenes.find(
-    (scene) => scene.media?.type === 'youtube_clip' && scene.media.missing
+    (scene) =>
+      scene.media?.provenance?.provider === 'youtube' && scene.media.missing
   )
   if (missingYouTubeScene) {
     throw new Error(

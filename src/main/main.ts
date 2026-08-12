@@ -418,8 +418,8 @@ async function loadProjectDocument(projectId: string) {
         !media ||
         media.sourceDurationSec ||
         media.type === 'local_image' ||
-        media.type === 'google_image' ||
-        media.type === 'duckduckgo_image' ||
+        media.type === 'remote_image' ||
+        media.type === 'motion_graphic' ||
         /^(https?:|data:|blob:)/.test(media.sourceUrl)
       ) {
         return
@@ -440,7 +440,7 @@ async function loadProjectDocument(projectId: string) {
 
 async function repairYouTubeProjectMedia(project: ProjectDocument) {
   const youtubeScenes = (project.scenes || []).filter(
-    (scene) => scene.media?.type === 'youtube_clip'
+    (scene) => scene.media?.provenance?.provider === 'youtube'
   )
   if (youtubeScenes.length === 0) return false
 

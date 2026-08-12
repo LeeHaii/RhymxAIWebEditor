@@ -11,6 +11,8 @@ import {
   Trash2,
   Video,
   Youtube,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
 import { selectPexelsVideoSources } from '../../../core/media/pexelsVideoFiles'
@@ -21,6 +23,12 @@ import {
   TimecodePart,
   updateTimecodePart,
 } from '../../utils/timecode'
+import {
+  captionsToSrt,
+  captionsToVtt,
+  parseCaptions,
+  saveCaptionFile,
+} from '../../utils/captions'
 
 type InspectorTab = 'properties' | 'media' | 'subtitles'
 type SearchTab = 'duckduckgo' | 'pexels-image' | 'pexels-video' | 'youtube'
@@ -42,6 +50,7 @@ export default function ContextInspector() {
     updateAudioClip,
     updateSubtitle,
     splitSubtitle,
+    replaceSubtitles,
     apiKeys,
     subtitleSettings,
     updateSubtitleSettings,
@@ -62,6 +71,7 @@ export default function ContextInspector() {
       updateAudioClip: state.updateAudioClip,
       updateSubtitle: state.updateSubtitle,
       splitSubtitle: state.splitSubtitle,
+      replaceSubtitles: state.replaceSubtitles,
       apiKeys: state.apiKeys,
       subtitleSettings: state.subtitleSettings,
       updateSubtitleSettings: state.updateSubtitleSettings,
@@ -202,12 +212,16 @@ export default function ContextInspector() {
     if (!activeSceneId) return
     assignMediaToScene(activeSceneId, {
       id: image.id,
-      type: 'duckduckgo_image',
+      type: 'remote_image',
       sourceUrl: image.sourceUrl,
       thumbnailUrl: image.thumbnailUrl,
       title: image.title,
       imageFit: 'cover',
       enableKenBurnsEffect: true,
+      provenance: {
+        provider: image.source === 'pexels' ? 'pexels' : 'wikimedia',
+        sourceId: image.id,
+      },
     })
   }
 
@@ -217,7 +231,7 @@ export default function ContextInspector() {
     if (!sources.sourceUrl) return
     assignMediaToScene(activeSceneId, {
       id: `pex_${video.id}`,
-      type: 'pexels_video',
+      type: 'remote_video',
       sourceUrl: sources.sourceUrl,
       previewSourceUrl: sources.previewSourceUrl,
       thumbnailUrl: video.image,
@@ -227,6 +241,19 @@ export default function ContextInspector() {
       providerUrl: video.url,
       creatorName: video.user?.name,
       creatorUrl: video.user?.url,
+      provenance: {
+        provider: 'pexels',
+        sourceId: String(video.id),
+        landingPageUrl: video.url,
+        creator: video.user?.name,
+        creatorUrl: video.user?.url,
+        license: {
+          name: 'Pexels license',
+          url: 'https://www.pexels.com/license/',
+          attributionRequired: false,
+          attributionText: video.user?.name ? `Video by ${video.user.name} on Pexels` : undefined,
+        },
+      },
     })
   }
 
@@ -260,7 +287,7 @@ export default function ContextInspector() {
       ])
       assignMediaToScene(activeSceneId, {
         id: mediaId,
-        type: 'youtube_clip',
+        type: 'local_video',
         kind: 'video',
         sourceUrl: localPath,
         thumbnailUrl: selectedYoutube.thumbnailUrl,
@@ -270,6 +297,11 @@ export default function ContextInspector() {
         providerUrl: selectedYoutube.url,
         providerStartSec: start,
         missing: false,
+        provenance: {
+          provider: 'youtube',
+          sourceId: selectedYoutube.id,
+          landingPageUrl: selectedYoutube.url,
+        },
       })
     } catch (error) {
       setTrimProgress(null)
@@ -382,6 +414,8 @@ export default function ContextInspector() {
         <SubtitleSettingsPanel
           settings={subtitleSettings}
           updateSettings={updateSubtitleSettings}
+          subtitles={subtitles}
+          replaceSubtitles={replaceSubtitles}
         />
       ) : !activeScene ? (
         <EmptyInspector text="Select a visual segment before attaching searched media." />
@@ -836,10 +870,28 @@ function SceneProperties({
 function SubtitleSettingsPanel({
   settings,
   updateSettings,
+  subtitles,
+  replaceSubtitles,
 }: {
   settings: ReturnType<typeof useEditorStore.getState>['subtitleSettings']
   updateSettings: ReturnType<typeof useEditorStore.getState>['updateSubtitleSettings']
+  subtitles: ReturnType<typeof useEditorStore.getState>['subtitles']
+  replaceSubtitles: ReturnType<typeof useEditorStore.getState>['replaceSubtitles']
 }) {
+  const importCaptions = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.srt,.vtt,text/vtt,application/x-subrip'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      const parsed = parseCaptions(await file.text())
+      if (parsed.length) replaceSubtitles(parsed)
+      else alert('No valid SRT or WebVTT caption cues were found.')
+    }
+    input.click()
+  }
+
   return (
     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-5">
       <ToggleRow
@@ -847,6 +899,37 @@ function SubtitleSettingsPanel({
         enabled={settings.enabled}
         onChange={(enabled) => updateSettings({ enabled })}
       />
+      <section className="space-y-3">
+        <label className="block text-[9px] text-slate-500">
+          Caption mode
+          <select
+            value={settings.mode}
+            onChange={(event) => updateSettings({ mode: event.target.value as typeof settings.mode })}
+            className="mt-1 w-full h-8 bg-[#090b10] border border-white/10 rounded px-2 text-[10px]"
+          >
+            <option value="sentence">Sentence block</option>
+            <option value="active-word">Active-word highlight</option>
+            <option value="karaoke">Karaoke fill</option>
+            <option value="word">One word at a time</option>
+            <option value="phrase">Two-to-four-word phrases</option>
+            <option value="keywords">Emphasized keywords</option>
+          </select>
+        </label>
+        <ColorProperty
+          label="Active word color"
+          value={settings.activeWordColor}
+          onChange={(activeWordColor) => updateSettings({ activeWordColor })}
+        />
+        <PropertySlider
+          label="Maximum characters per line"
+          value={settings.maximumCharactersPerLine}
+          minimum={18}
+          maximum={72}
+          step={1}
+          display={String(settings.maximumCharactersPerLine)}
+          onChange={(maximumCharactersPerLine) => updateSettings({ maximumCharactersPerLine })}
+        />
+      </section>
       <div className="grid grid-cols-2 gap-3">
         <ColorProperty
           label="Text color"
@@ -924,6 +1007,15 @@ function SubtitleSettingsPanel({
             />
           </>
         )}
+      </section>
+
+      <section className="border-t border-white/5 pt-4">
+        <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-3">Caption files</div>
+        <div className="grid grid-cols-3 gap-2">
+          <button onClick={() => saveCaptionFile('rhymx-captions.srt', captionsToSrt(subtitles), 'application/x-subrip')} className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 py-2 text-[9px] flex items-center justify-center gap-1"><Download className="h-3 w-3" />SRT</button>
+          <button onClick={() => saveCaptionFile('rhymx-captions.vtt', captionsToVtt(subtitles), 'text/vtt')} className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 py-2 text-[9px] flex items-center justify-center gap-1"><Download className="h-3 w-3" />VTT</button>
+          <button onClick={importCaptions} className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 py-2 text-[9px] flex items-center justify-center gap-1"><Upload className="h-3 w-3" />Import</button>
+        </div>
       </section>
 
       <section className="border-t border-white/5 pt-4 space-y-3">

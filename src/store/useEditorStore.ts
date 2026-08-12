@@ -4,6 +4,7 @@ import {
   LibraryAsset,
   MediaAsset,
   ProjectDocument,
+  SceneMediaMatch,
   SceneSegment,
   SubtitleSegment,
   SubtitleSettings,
@@ -26,6 +27,11 @@ const defaultSubtitleSettings: SubtitleSettings = {
   outlineColor: '#000000',
   outlineWidth: 3,
   position: 'bottom',
+  mode: 'sentence',
+  activeWordColor: '#c4b5fd',
+  maximumCharactersPerLine: 42,
+  minimumDisplayDurationSec: 0.7,
+  maximumDisplayDurationSec: 6,
 }
 
 const defaultTrackSettings = (): TrackSettings => ({ muted: false, visible: true })
@@ -132,9 +138,7 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
         }
       : null
     const isImage =
-      media?.type === 'local_image' ||
-      media?.type === 'google_image' ||
-      media?.type === 'duckduckgo_image'
+      media?.type === 'local_image' || media?.type === 'remote_image'
     const maximumDuration =
       media && !isImage && media.sourceDurationSec
         ? Math.max(1 / 30, media.sourceDurationSec - (media.sourceStartSec ?? 0))
@@ -198,6 +202,7 @@ interface HistorySnapshot {
   mediaLibrary: LibraryAsset[]
   audioClips: TimelineAudioClip[]
   subtitleSettings: SubtitleSettings
+  pendingMatches: SceneMediaMatch[]
 }
 
 interface EditorStore {
@@ -215,6 +220,7 @@ interface EditorStore {
   mediaLibrary: LibraryAsset[]
   audioClips: TimelineAudioClip[]
   subtitleSettings: SubtitleSettings
+  pendingMatches: SceneMediaMatch[]
   activeSceneId: string | null
   activeAudioClipId: string | null
   activeSubtitleId: string | null
@@ -250,6 +256,7 @@ interface EditorStore {
   setProjectName: (name: string) => void
   setAudioFile: (file: { path: string; duration: number } | null) => void
   setScenes: (scenes: SceneSegment[], subtitleTimingScenes?: SceneSegment[]) => void
+  setPendingMatches: (matches: SceneMediaMatch[]) => void
   updateScene: (id: string, updates: Partial<SceneSegment>) => void
   splitScene: (id: string, atTimeSec: number) => void
   trimScene: (
@@ -271,6 +278,7 @@ interface EditorStore {
   setActiveSubtitleId: (id: string | null) => void
   updateSubtitle: (id: string, text: string) => void
   splitSubtitle: (id: string, characterIndex: number) => void
+  replaceSubtitles: (subtitles: SubtitleSegment[]) => void
   setCurrentTimeSec: (time: number) => void
   requestSeek: (time: number) => void
   requestPlayback: (command?: 'play' | 'pause' | 'toggle') => void
@@ -320,6 +328,7 @@ const subtitlesFromScenes = (scenes: SceneSegment[]): SubtitleSegment[] =>
     startTimeSec: scene.startTimeSec,
     endTimeSec: scene.endTimeSec,
     text: scene.transcriptText,
+    words: scene.words,
   }))
 
 const capture = (state: EditorStore): HistorySnapshot => ({
@@ -332,6 +341,7 @@ const capture = (state: EditorStore): HistorySnapshot => ({
   mediaLibrary: state.mediaLibrary,
   audioClips: state.audioClips,
   subtitleSettings: state.subtitleSettings,
+  pendingMatches: state.pendingMatches,
 })
 
 const historyChange = (state: EditorStore, changes: Partial<EditorStore>) => ({
@@ -368,6 +378,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   mediaLibrary: [],
   audioClips: [],
   subtitleSettings: defaultSubtitleSettings,
+  pendingMatches: [],
   activeSceneId: null,
   activeAudioClipId: null,
   activeSubtitleId: null,
@@ -409,6 +420,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       mediaLibrary: [],
       audioClips: [],
       subtitleSettings: defaultSubtitleSettings,
+      pendingMatches: [],
       activeSceneId: null,
       activeAudioClipId: null,
       activeSubtitleId: null,
@@ -458,6 +470,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       mediaLibrary: project.mediaLibrary || [],
       audioClips: normalizeAudioClips(project.audioClips),
       subtitleSettings: normalizeSubtitleSettings(project.subtitleSettings),
+      pendingMatches: [],
       activeSceneId: scenes[0]?.id || null,
       activeAudioClipId: null,
       activeSubtitleId: subtitles[0]?.id || null,
@@ -486,6 +499,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       subtitles: [],
       mediaLibrary: [],
       audioClips: [],
+      pendingMatches: [],
       activeSceneId: null,
       activeAudioClipId: null,
       activeSubtitleId: null,
@@ -527,6 +541,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         activeSubtitleId: subtitles[0]?.id || null,
       })
     }),
+  setPendingMatches: (pendingMatches) => set({ pendingMatches }),
   updateScene: (id, updates) =>
     set((state) => {
       const current = state.scenes.find((scene) => scene.id === id)
@@ -619,8 +634,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
         media:
           scene.media &&
           scene.media.type !== 'local_image' &&
-          scene.media.type !== 'google_image' &&
-          scene.media.type !== 'duckduckgo_image'
+          scene.media.type !== 'remote_image' &&
+          scene.media.type !== 'motion_graphic'
             ? {
                 ...scene.media,
                 sourceStartSec:
@@ -772,12 +787,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         keywords: [],
         media: {
           id: asset.id,
-          type:
-            asset.origin === 'youtube'
-              ? 'youtube_clip'
-              : asset.kind === 'video'
-                ? 'local_video'
-                : 'local_image',
+          type: asset.kind === 'video' ? 'local_video' : 'local_image',
           kind: asset.kind,
           sourceUrl: asset.path,
           thumbnailUrl: asset.thumbnailUrl || asset.path,
@@ -790,6 +800,18 @@ export const useEditorStore = create<EditorStore>((set) => ({
           enableKenBurnsEffect: asset.kind === 'image',
           missing: asset.missing,
           missingReason: asset.missingReason,
+          provenance:
+            asset.provenance ||
+            (asset.origin === 'youtube'
+              ? {
+                  provider: 'youtube',
+                  sourceId: asset.id,
+                  landingPageUrl: asset.providerUrl,
+                }
+              : {
+                  provider: 'local',
+                  sourceId: asset.id,
+                }),
         },
         trackId,
         volume: 1,
@@ -890,6 +912,13 @@ export const useEditorStore = create<EditorStore>((set) => ({
       subtitles.splice(index, 1, first, second)
       return historyChange(state, { subtitles, activeSubtitleId: second.id })
     }),
+  replaceSubtitles: (subtitles) =>
+    set((state) =>
+      historyChange(state, {
+        subtitles,
+        activeSubtitleId: subtitles[0]?.id || null,
+      })
+    ),
   setCurrentTimeSec: (currentTimeSec) =>
     set((state) =>
       Math.abs(state.currentTimeSec - currentTimeSec) < 0.0001
@@ -940,8 +969,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
           }
           const isImage =
             normalizedMedia.type === 'local_image' ||
-            normalizedMedia.type === 'google_image' ||
-            normalizedMedia.type === 'duckduckgo_image'
+            normalizedMedia.type === 'remote_image' ||
+            normalizedMedia.type === 'motion_graphic'
           const maximumDuration =
             !isImage && normalizedMedia.sourceDurationSec
               ? Math.max(
@@ -1190,5 +1219,6 @@ export function getProjectDocument(): ProjectDocument | null {
     audioClips: state.audioClips,
     subtitleSettings: state.subtitleSettings,
     visualGapsFilled: true,
+    captionWords: state.subtitles.flatMap((subtitle) => subtitle.words || []),
   }
 }

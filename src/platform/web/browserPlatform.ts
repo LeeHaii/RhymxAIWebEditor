@@ -8,12 +8,17 @@ import {
   ImageSearchResult,
   ImportedFile,
   MediaKind,
+  MediaCandidate,
+  MediaProvider,
+  MediaSearchRequest,
+  MediaSearchResponse,
   PexelsAutoMatchProgress,
   PexelsAutoMatchResult,
   ProjectDocument,
   ProjectSummary,
   RhymxPlatformAPI,
   SceneSegment,
+  SceneMediaMatch,
   TranscriptionProgress,
   YouTubeSearchResult,
 } from '../../types/editor'
@@ -33,7 +38,7 @@ import {
 
 const GROQ_ROOT = 'https://api.groq.com/openai/v1'
 const SETTINGS_KEY = 'rhymx.web.settings'
-const SECRET_PREFIX = 'rhymx.web.key.'
+const sessionKeys = new Map<string, string>()
 const exportTargets = new Map<string, FileSystemFileHandle>()
 const batchTargets = new Map<string, FileSystemDirectoryHandle>()
 let exportController: AbortController | null = null
@@ -42,6 +47,7 @@ let transcriptionListener: (progress: TranscriptionProgress) => void = () => und
 let pexelsListener: (progress: PexelsAutoMatchProgress) => void = () => undefined
 let exportListener: (progress: number) => void = () => undefined
 let batchListener: (progress: BatchExportProgress) => void = () => undefined
+let acquisitionListener: (progress: { candidateId: string; percent: number }) => void = () => undefined
 
 function requestResult<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -197,7 +203,8 @@ async function groqRequest<T>(path: string, apiKey: string, init: RequestInit) {
 
 function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], duration: number): SceneSegment[] {
   const timedWords = words
-    .map((word) => ({
+    .map((word, index) => ({
+      id: `word_${index + 1}`,
       text: String(word.word || '').trim(),
       start: Number(word.start),
       end: Number(word.end),
@@ -216,6 +223,7 @@ function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], durati
       volume: 1,
       scale: 1,
       opacity: 1,
+      words: [],
     }))
   }
   const groups: typeof timedWords[] = []
@@ -241,10 +249,31 @@ function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], durati
     volume: 1,
     scale: 1,
     opacity: 1,
+    words: items.map((item) => ({
+      id: item.id,
+      text: item.text,
+      startTimeSec: item.start,
+      endTimeSec: item.end,
+    })),
   }))
 }
 
-async function transcribeAudio(source: string, apiKey: string) {
+async function backendRequest<T>(path: string, init?: RequestInit) {
+  const response = await fetch(path, init)
+  if (!response.ok) {
+    const body = await response.text()
+    let message = body
+    try {
+      message = (JSON.parse(body) as { error?: string }).error || body
+    } catch {
+      // Keep the response body as the actionable message.
+    }
+    throw new Error(message || `Rhymx service request failed (${response.status}).`)
+  }
+  return (await response.json()) as T
+}
+
+async function transcribeAudio(source: string, _apiKey = '') {
   const file = await fileForSource(source)
   if (!file) throw new Error('The selected voiceover is no longer available. Re-select it and try again.')
   transcriptionListener({ stage: 'preparing', completed: 0, total: 1, message: 'Preparing voiceover in your browser' })
@@ -255,32 +284,32 @@ async function transcribeAudio(source: string, apiKey: string) {
   form.append('timestamp_granularities[]', 'word')
   form.append('timestamp_granularities[]', 'segment')
   transcriptionListener({ stage: 'transcribing', completed: 0, total: 1, message: 'Transcribing with Groq Whisper' })
-  const result = await groqRequest<{
+  const result = await backendRequest<{
     duration?: number
     words?: GroqWord[]
     segments?: GroqSegment[]
-  }>('/audio/transcriptions', apiKey.trim(), { method: 'POST', body: form })
+  }>('/api/transcriptions', { method: 'POST', body: form })
   let scenes = scenesFromTranscript(result.words || [], result.segments || [], result.duration || (await mediaDuration(source)) || 0)
   if (!scenes.length) throw new Error('Groq Whisper returned an empty transcript.')
   transcriptionListener({ stage: 'keywords', completed: 0, total: 1, message: 'Generating visual search phrases' })
   try {
-    const keywordResult = await groqRequest<{ choices?: Array<{ message?: { content?: string } }> }>(
-      '/chat/completions', apiKey.trim(), {
+    const keywordResult = await backendRequest<{
+      keywords?: string[][]
+      treatments?: Array<'media' | 'motion'>
+    }>(
+      '/api/keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          temperature: 0.2,
-          response_format: { type: 'json_object' },
-          messages: [{
-            role: 'user',
-            content: `Return JSON {"keywords":[["phrase"]]} with 1-3 concrete stock-footage search phrases for each narration scene, in order: ${JSON.stringify(scenes.map((scene) => scene.transcriptText))}`,
-          }],
+          scenes: scenes.map((scene) => scene.transcriptText),
         }),
       }
     )
-    const parsed = JSON.parse(keywordResult.choices?.[0]?.message?.content || '{}') as { keywords?: string[][] }
-    scenes = scenes.map((scene, index) => ({ ...scene, keywords: parsed.keywords?.[index]?.slice(0, 3) || [] }))
+    scenes = scenes.map((scene, index) => ({
+      ...scene,
+      keywords: keywordResult.keywords?.[index]?.slice(0, 3) || [],
+      suggestedTreatment: keywordResult.treatments?.[index] || 'media',
+    }))
   } catch (error) {
     console.warn('Keyword generation failed; transcription remains usable.', error)
   }
@@ -321,7 +350,7 @@ async function autoMatchPexelsVideos(scenes: SceneSegment[], apiKey: string): Pr
           ...scene,
           media: {
             id: `pexels_${video.id}`,
-            type: 'pexels_video',
+            type: 'remote_video',
             sourceUrl: sources.sourceUrl,
             previewSourceUrl: sources.previewSourceUrl,
             thumbnailUrl: video.image || '',
@@ -332,6 +361,21 @@ async function autoMatchPexelsVideos(scenes: SceneSegment[], apiKey: string): Pr
             providerUrl: video.url,
             creatorName: video.user?.name,
             creatorUrl: video.user?.url,
+            provenance: {
+              provider: 'pexels',
+              sourceId: String(video.id),
+              landingPageUrl: video.url,
+              creator: video.user?.name,
+              creatorUrl: video.user?.url,
+              license: {
+                name: 'Pexels license',
+                url: 'https://www.pexels.com/license/',
+                attributionRequired: false,
+                attributionText: video.user?.name
+                  ? `Video by ${video.user.name} on Pexels`
+                  : undefined,
+              },
+            },
           },
         })
       } else output.push(scene)
@@ -387,6 +431,209 @@ async function searchYouTube(query: string, apiKey: string): Promise<YouTubeSear
     thumbnailUrl: item.snippet?.thumbnails?.medium?.url || '',
     url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
   }] : [])
+}
+
+async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResponse> {
+  return backendRequest<MediaSearchResponse>('/api/media/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Rhymx-Actor': anonymousActorId(),
+    },
+    body: JSON.stringify(request),
+  })
+}
+
+async function resolveMedia(candidate: MediaCandidate) {
+  return backendRequest<MediaCandidate>('/api/media/resolve', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Rhymx-Actor': anonymousActorId(),
+    },
+    body: JSON.stringify({ candidate }),
+  })
+}
+
+function anonymousActorId() {
+  const key = 'rhymx.anonymousActor'
+  const existing = localStorage.getItem(key)
+  if (existing) return existing
+  const id = crypto.randomUUID()
+  localStorage.setItem(key, id)
+  return id
+}
+
+function scoreCandidate(
+  candidate: MediaCandidate,
+  scene: SceneSegment,
+  usedProviders: Set<MediaProvider>
+) {
+  const queryTerms = (scene.keywords.join(' ') || scene.transcriptText)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length > 2)
+  const haystack = candidate.title.toLowerCase()
+  const relevance = queryTerms.length
+    ? queryTerms.filter((term) => haystack.includes(term)).length / queryTerms.length
+    : 0
+  const preferredType = candidate.kind === 'video' ? 15 : 6
+  const orientation =
+    candidate.width && candidate.height
+      ? candidate.width >= candidate.height
+        ? 15
+        : 5
+      : 7
+  const resolution = Math.min(10, ((candidate.width || 640) / 1920) * 10)
+  const duration = candidate.kind === 'image'
+    ? 7
+    : candidate.durationSec
+      ? Math.max(0, 10 - Math.abs(candidate.durationSec - scene.durationSec) * 0.8)
+      : 5
+  const diversity = usedProviders.has(candidate.provider) ? 0 : 5
+  const license = candidate.license
+    ? candidate.license.warning
+      ? 1
+      : 5
+    : 0
+  return relevance * 35 + preferredType + orientation + resolution + duration + diversity + license
+}
+
+async function autoMatchScenes(
+  scenes: SceneSegment[],
+  providers: MediaProvider[] = [
+    'pexels',
+    'pixabay',
+    'archive_org',
+    'nasa',
+    'wikimedia',
+  ]
+): Promise<SceneMediaMatch[]> {
+  const matches: SceneMediaMatch[] = []
+  const usedAssetIds = new Set<string>()
+  const usedProviders = new Set<MediaProvider>()
+  let matched = 0
+  for (const [index, scene] of scenes.entries()) {
+    const query = scene.keywords[0] || scene.transcriptText.split(/\s+/).slice(0, 8).join(' ')
+    try {
+      const response = await searchMedia({
+        query,
+        providers,
+        kind: scene.suggestedTreatment === 'motion' ? 'all' : 'video',
+        orientation: 'landscape',
+      })
+      const candidates = response.candidates
+        .filter((candidate) => !usedAssetIds.has(`${candidate.provider}:${candidate.id}`))
+        .map((candidate) => ({
+          ...candidate,
+          score: scoreCandidate(candidate, scene, usedProviders),
+        }))
+        .sort((first, second) => (second.score || 0) - (first.score || 0))
+        .slice(0, 4)
+      if (candidates[0]) {
+        matched += 1
+        usedAssetIds.add(`${candidates[0].provider}:${candidates[0].id}`)
+        usedProviders.add(candidates[0].provider)
+      }
+      matches.push({
+        sceneId: scene.id,
+        query,
+        candidates,
+        confidence:
+          (candidates[0]?.score || 0) >= 60
+            ? 'strong'
+            : candidates.length
+              ? 'review'
+              : 'none',
+      })
+    } catch {
+      matches.push({ sceneId: scene.id, query, candidates: [], confidence: 'none' })
+    }
+    pexelsListener({
+      completed: index + 1,
+      total: scenes.length,
+      matched,
+      sceneId: scene.id,
+      query,
+    })
+  }
+  return matches
+}
+
+async function readResponseWithProgress(response: Response, candidateId: string) {
+  if (!response.ok) throw new Error(`Media acquisition failed (${response.status}).`)
+  const total = Number(response.headers.get('Content-Length') || 0)
+  if (!response.body) return response.blob()
+  const reader = response.body.getReader()
+  const chunks: ArrayBuffer[] = []
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value.slice().buffer as ArrayBuffer)
+    received += value.byteLength
+    acquisitionListener({
+      candidateId,
+      percent: total ? Math.min(99, (received / total) * 100) : 45,
+    })
+  }
+  return new Blob(chunks)
+}
+
+async function acquireMedia(candidate: MediaCandidate) {
+  const resolved = candidate.downloadUrl ? candidate : await resolveMedia(candidate)
+  let response: Response
+  try {
+    response = await fetch(resolved.downloadUrl || resolved.previewUrl)
+    if (!response.ok) throw new Error('Direct acquisition failed.')
+  } catch {
+    response = await fetch('/api/media/relay', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rhymx-Actor': anonymousActorId(),
+      },
+      body: JSON.stringify({ candidate: resolved }),
+    })
+  }
+  const blob = await readResponseWithProgress(response, candidate.id)
+  const contentType = response.headers.get('Content-Type') || blob.type ||
+    (candidate.kind === 'video' ? 'video/mp4' : 'image/jpeg')
+  const extension = contentType.includes('webm')
+    ? 'webm'
+    : contentType.includes('png')
+      ? 'png'
+      : contentType.includes('webp')
+        ? 'webp'
+        : candidate.kind === 'video'
+          ? 'mp4'
+          : 'jpg'
+  const file = new File([blob], `${candidate.provider}-${candidate.id}.${extension}`, { type: contentType })
+  const stored = await storeAsset(
+    file,
+    candidate.kind,
+    undefined,
+    `${candidate.provider}:${candidate.id}`
+  )
+  acquisitionListener({ candidateId: candidate.id, percent: 100 })
+  return {
+    id: `${candidate.provider}:${candidate.id}`,
+    name: candidate.title,
+    path: stored.path,
+    kind: candidate.kind,
+    durationSec: candidate.durationSec,
+    thumbnailUrl: candidate.thumbnailUrl,
+    providerUrl: candidate.landingPageUrl,
+    provenance: {
+      provider: candidate.provider,
+      sourceId: candidate.id,
+      landingPageUrl: candidate.landingPageUrl,
+      creator: candidate.creator,
+      creatorUrl: candidate.creatorUrl,
+      license: candidate.license,
+      acquiredAt: new Date().toISOString(),
+    },
+  }
 }
 
 function settings(): AppSettings {
@@ -541,6 +788,11 @@ const api: RhymxPlatformAPI = {
   transcribeAudio,
   onTranscriptionProgress: (callback) => { transcriptionListener = callback },
   autoMatchPexelsVideos,
+  autoMatchScenes,
+  searchMedia,
+  resolveMedia,
+  acquireMedia,
+  onAssetAcquisitionProgress: (callback) => { acquisitionListener = callback },
   onPexelsAutoMatchProgress: (callback) => { pexelsListener = callback },
   listProjects,
   loadProject,
@@ -589,12 +841,12 @@ const api: RhymxPlatformAPI = {
   batchExportProjects,
   cancelBatchExport: async () => { batchCancelled = true; exportController?.abort(); return true },
   onBatchExportProgress: (callback) => { batchListener = callback },
-  getPexelsKey: async () => localStorage.getItem(`${SECRET_PREFIX}pexels`),
-  setPexelsKey: async (key) => localStorage.setItem(`${SECRET_PREFIX}pexels`, key),
-  getGroqKey: async () => localStorage.getItem(`${SECRET_PREFIX}groq`),
-  setGroqKey: async (key) => localStorage.setItem(`${SECRET_PREFIX}groq`, key),
-  getYouTubeKey: async () => localStorage.getItem(`${SECRET_PREFIX}youtube`),
-  setYouTubeKey: async (key) => localStorage.setItem(`${SECRET_PREFIX}youtube`, key),
+  getPexelsKey: async () => sessionKeys.get('pexels') || null,
+  setPexelsKey: async (key) => { sessionKeys.set('pexels', key) },
+  getGroqKey: async () => sessionKeys.get('groq') || null,
+  setGroqKey: async (key) => { sessionKeys.set('groq', key) },
+  getYouTubeKey: async () => sessionKeys.get('youtube') || null,
+  setYouTubeKey: async (key) => { sessionKeys.set('youtube', key) },
 }
 
 export function installBrowserPlatform() {

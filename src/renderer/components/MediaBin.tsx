@@ -105,12 +105,7 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
     if (asset.kind !== 'image' && asset.kind !== 'video') return
     assignMediaToScene(activeSceneId, {
       id: asset.id,
-      type:
-        asset.origin === 'youtube'
-          ? 'youtube_clip'
-          : asset.kind === 'video'
-            ? 'local_video'
-            : 'local_image',
+      type: asset.kind === 'video' ? 'local_video' : 'local_image',
       kind: asset.kind,
       sourceUrl: asset.path,
       thumbnailUrl: asset.thumbnailUrl || asset.path,
@@ -122,6 +117,15 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
       imageFit: 'cover',
       enableKenBurnsEffect: asset.kind === 'image',
       missing: false,
+      provenance:
+        asset.provenance ||
+        (asset.origin === 'youtube'
+          ? {
+              provider: 'youtube',
+              sourceId: asset.id,
+              landingPageUrl: asset.providerUrl,
+            }
+          : { provider: 'local', sourceId: asset.id }),
     })
   }
 

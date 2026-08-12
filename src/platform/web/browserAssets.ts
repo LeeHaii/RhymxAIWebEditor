@@ -6,6 +6,7 @@ type AssetRecord = {
   kind: MediaKind
   file?: File
   handle?: FileSystemFileHandle
+  opfsName?: string
 }
 
 const DATABASE_NAME = 'rhymx-web'
@@ -40,13 +41,40 @@ export function openRhymxDatabase() {
 export async function storeAsset(
   file: File,
   kind: MediaKind,
-  handle?: FileSystemFileHandle
+  handle?: FileSystemFileHandle,
+  stableId?: string
 ): Promise<ImportedFile> {
-  const id = crypto.randomUUID()
-  const record: AssetRecord = handle
-    ? { id, name: file.name, kind, handle }
-    : { id, name: file.name, kind, file }
+  const id = stableId || crypto.randomUUID()
   const database = await openRhymxDatabase()
+  const existing = (await requestResult(
+    database.transaction('assets', 'readonly').objectStore('assets').get(id)
+  )) as AssetRecord | undefined
+  if (existing) {
+    const source = `${ASSET_PREFIX}${id}`
+    const existingFile = await fileForSource(source)
+    if (existingFile) {
+      if (!objectUrls.has(source)) objectUrls.set(source, URL.createObjectURL(existingFile))
+      return { path: source, name: existing.name, kind: existing.kind }
+    }
+  }
+  let record: AssetRecord
+  if (handle) {
+    record = { id, name: file.name, kind, handle }
+  } else if (file.size >= 20 * 1024 * 1024 && navigator.storage?.getDirectory) {
+    try {
+      const root = await navigator.storage.getDirectory()
+      const opfsName = `rhymx-${id.replace(/[^a-z0-9-]/gi, '_')}`
+      const opfsHandle = await root.getFileHandle(opfsName, { create: true })
+      const writable = await opfsHandle.createWritable()
+      await writable.write(file)
+      await writable.close()
+      record = { id, name: file.name, kind, opfsName }
+    } catch {
+      record = { id, name: file.name, kind, file }
+    }
+  } else {
+    record = { id, name: file.name, kind, file }
+  }
   const transaction = database.transaction('assets', 'readwrite')
   await requestResult(transaction.objectStore('assets').put(record))
   const source = `${ASSET_PREFIX}${id}`
@@ -69,6 +97,15 @@ export async function fileForSource(source: string): Promise<File | null> {
   if (record.handle) {
     try {
       return await record.handle.getFile()
+    } catch {
+      return null
+    }
+  }
+  if (record.opfsName && navigator.storage?.getDirectory) {
+    try {
+      const root = await navigator.storage.getDirectory()
+      const handle = await root.getFileHandle(record.opfsName)
+      return await handle.getFile()
     } catch {
       return null
     }
@@ -106,6 +143,18 @@ export async function storedAssetBytes() {
   const records = (await requestResult(
     transaction.objectStore('assets').getAll()
   )) as AssetRecord[]
-  return records.reduce((total, record) => total + (record.file?.size || 0), 0)
+  const sizes = await Promise.all(records.map(async (record) => {
+    if (record.file) return record.file.size
+    if (record.opfsName && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory()
+        return (await (await root.getFileHandle(record.opfsName)).getFile()).size
+      } catch {
+        return 0
+      }
+    }
+    return 0
+  }))
+  return sizes.reduce((total, size) => total + size, 0)
 }
 

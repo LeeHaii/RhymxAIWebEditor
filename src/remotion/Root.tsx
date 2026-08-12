@@ -34,6 +34,11 @@ export const Root: React.FC = () => {
             outlineColor: '#000000',
             outlineWidth: 3,
             position: 'bottom' as const,
+            mode: 'sentence' as const,
+            activeWordColor: '#c4b5fd',
+            maximumCharactersPerLine: 42,
+            minimumDisplayDurationSec: 0.7,
+            maximumDisplayDurationSec: 6,
           },
         }}
         calculateMetadata={({ props }) => ({

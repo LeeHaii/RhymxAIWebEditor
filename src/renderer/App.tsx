@@ -7,6 +7,7 @@ import ProjectHome from './components/ProjectHome'
 import NewProject from './components/NewProject'
 import TranscribingScreen from './components/TranscribingScreen'
 import MediaBin from './components/MediaBin'
+import ApprovalContactSheet from './components/ApprovalContactSheet'
 import { getProjectDocument, useEditorStore } from '../store/useEditorStore'
 
 const clamp = (value: number, minimum: number, maximum: number) =>
@@ -222,6 +223,7 @@ function App() {
   if (screen === 'projects') return <ProjectHome />
   if (screen === 'new-project') return <NewProject />
   if (screen === 'transcribing') return <TranscribingScreen />
+  if (screen === 'approval') return <ApprovalContactSheet />
   return <EditorWorkspace />
 }
 

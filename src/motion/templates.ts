@@ -1,0 +1,103 @@
+import { MotionTemplateManifest } from '../types/editor'
+
+export const motionTemplates: MotionTemplateManifest[] = [
+  {
+    id: 'hero_title',
+    version: 1,
+    name: 'Hero title',
+    category: 'Titles',
+    engine: 'remotion',
+    defaultDurationSec: 4,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Title', type: 'text', defaultValue: 'A story worth seeing' },
+      { id: 'body', label: 'Supporting text', type: 'text', defaultValue: 'Built from your narration' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#8b5cf6' },
+    ],
+  },
+  {
+    id: 'statistic',
+    version: 1,
+    name: 'Statistic reveal',
+    category: 'Data',
+    engine: 'remotion',
+    defaultDurationSec: 4,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Statistic', type: 'text', defaultValue: '72%' },
+      { id: 'body', label: 'Label', type: 'text', defaultValue: 'More memorable with motion' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#22d3ee' },
+    ],
+  },
+  {
+    id: 'quote',
+    version: 1,
+    name: 'Quote card',
+    category: 'Editorial',
+    engine: 'remotion',
+    defaultDurationSec: 5,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Quote', type: 'text', defaultValue: 'Editing should clarify the idea, not hide it.' },
+      { id: 'body', label: 'Attribution', type: 'text', defaultValue: 'Rhymx Studio' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#f59e0b' },
+    ],
+  },
+  {
+    id: 'progress_bar',
+    version: 1,
+    name: 'Progress bar',
+    category: 'Data',
+    engine: 'remotion',
+    defaultDurationSec: 4,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Label', type: 'text', defaultValue: 'Project complete' },
+      { id: 'value', label: 'Percent', type: 'number', defaultValue: 72 },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#34d399' },
+    ],
+  },
+  {
+    id: 'kinetic_title',
+    version: 1,
+    name: 'Kinetic title',
+    category: 'Advanced motion',
+    engine: 'hyperframes',
+    defaultDurationSec: 5,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Title', type: 'text', defaultValue: 'Momentum changes everything' },
+      { id: 'body', label: 'Supporting text', type: 'text', defaultValue: 'Kinetic typography' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#ec4899' },
+    ],
+  },
+  {
+    id: 'product_card',
+    version: 1,
+    name: 'Product launch',
+    category: 'Advanced motion',
+    engine: 'hyperframes',
+    defaultDurationSec: 6,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Product', type: 'text', defaultValue: 'Meet the next chapter' },
+      { id: 'body', label: 'Tagline', type: 'text', defaultValue: 'Designed to move with the story' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#a78bfa' },
+    ],
+  },
+  {
+    id: 'end_card',
+    version: 1,
+    name: 'End card',
+    category: 'Calls to action',
+    engine: 'hyperframes',
+    defaultDurationSec: 5,
+    supportsTransparency: false,
+    fields: [
+      { id: 'title', label: 'Message', type: 'text', defaultValue: 'Keep the story moving' },
+      { id: 'body', label: 'Call to action', type: 'text', defaultValue: 'rhymx.app' },
+      { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#60a5fa' },
+    ],
+  },
+]
+

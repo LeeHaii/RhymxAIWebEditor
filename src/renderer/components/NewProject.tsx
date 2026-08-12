@@ -1,5 +1,5 @@
 import React, { DragEvent, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, AudioLines, FileAudio, FolderOpen, KeyRound, Sparkles, Video } from 'lucide-react'
+import { ArrowLeft, AudioLines, FileAudio, FolderOpen, ShieldCheck, Sparkles, Video } from 'lucide-react'
 import {
   extendVisualScenesAcrossSpeechGaps,
   getProjectDocument,
@@ -11,11 +11,10 @@ export default function NewProject() {
   const {
     projectName,
     audioFile,
-    apiKeys,
-    setApiKeys,
     setScreen,
     beginProject,
     setScenes,
+    setPendingMatches,
     setIsProcessingAudio,
     setProcessingError,
     setProcessingStage,
@@ -28,31 +27,16 @@ export default function NewProject() {
   const [autoStockEnabled, setAutoStockEnabled] = useState(true)
 
   useEffect(() => {
-    window.rhymx
-      .getAppSettings()
-      .then((settings) => setAutoStockEnabled(settings.autoStockEnabled))
+    window.rhymx.getAppSettings().then((settings) => setAutoStockEnabled(settings.autoStockEnabled))
     window.rhymx.onTranscriptionProgress((progress) => {
-      setProcessingProgress({
-        completed: progress.completed,
-        total: progress.total,
-        matched: 0,
-        message: progress.message,
-      })
+      setProcessingProgress({ completed: progress.completed, total: progress.total, matched: 0, message: progress.message })
     })
     window.rhymx.onPexelsAutoMatchProgress((progress) => {
-      setProcessingProgress({
-        completed: progress.completed,
-        total: progress.total,
-        matched: progress.matched,
-        message: 'Searching Pexels for each scene',
-      })
+      setProcessingProgress({ completed: progress.completed, total: progress.total, matched: progress.matched, message: 'Searching free media across providers' })
     })
   }, [setProcessingProgress])
 
-  const fileName = useMemo(
-    () => selectedAudio?.path.split(/[\\/]/).pop() || '',
-    [selectedAudio]
-  )
+  const fileName = useMemo(() => selectedAudio?.path.split(/[\\/]/).pop() || '', [selectedAudio])
 
   const browse = async () => {
     const file = await window.rhymx.openAudioFile()
@@ -70,232 +54,64 @@ export default function NewProject() {
       return
     }
     const imported = await storeAsset(file, 'music')
-    setSelectedAudio({
-      path: imported.path,
-      duration: (await window.rhymx.getMediaDuration(imported.path)) || 0,
-    })
+    setSelectedAudio({ path: imported.path, duration: (await window.rhymx.getMediaDuration(imported.path)) || 0 })
   }
 
   const createProject = async () => {
-    if (!selectedAudio) {
-      alert('Choose a voiceover first.')
-      return
-    }
-    if (!apiKeys.groq.trim()) {
-      alert('Enter a Groq API key to transcribe your voiceover.')
-      return
-    }
-    if (autoStockEnabled && !apiKeys.pexels.trim()) {
-      alert('Enter a Pexels API key, or turn off automatic stock footage.')
-      return
-    }
-
-    await window.rhymx.setGroqKey(apiKeys.groq.trim())
-    if (autoStockEnabled) {
-      await window.rhymx.setPexelsKey(apiKeys.pexels.trim())
-    }
+    if (!selectedAudio) return
     beginProject(name, selectedAudio)
-    setProcessingProgress({
-      completed: 0,
-      total: 0,
-      matched: 0,
-      message: 'Analyzing voiceover',
-    })
-
+    setProcessingProgress({ completed: 0, total: 0, matched: 0, message: 'Analyzing voiceover' })
     try {
-      const result = await window.rhymx.transcribeAudio(selectedAudio.path, apiKeys.groq)
-      const subtitleTimingScenes = result.map((scene, index) => ({
-        ...scene,
-        id: scene.id || `scene_${index + 1}`,
-        media: scene.media || null,
-      }))
-      if (subtitleTimingScenes.length === 0) {
-        throw new Error('Groq Whisper returned an empty transcript.')
-      }
-      const measuredDuration =
-        selectedAudio.duration ||
-        subtitleTimingScenes.reduce(
-          (maximum, scene) => Math.max(maximum, scene.endTimeSec),
-          0
-        )
-      let scenes = extendVisualScenesAcrossSpeechGaps(
-        subtitleTimingScenes,
-        measuredDuration
-      )
+      const result = await window.rhymx.transcribeAudio(selectedAudio.path)
+      const subtitleTimingScenes = result.map((scene, index) => ({ ...scene, id: scene.id || `scene_${index + 1}`, media: scene.media || null }))
+      if (subtitleTimingScenes.length === 0) throw new Error('Groq Whisper returned an empty transcript.')
+      const measuredDuration = selectedAudio.duration || subtitleTimingScenes.reduce((maximum, scene) => Math.max(maximum, scene.endTimeSec), 0)
+      const scenes = extendVisualScenesAcrossSpeechGaps(subtitleTimingScenes, measuredDuration)
+      setScenes(scenes, subtitleTimingScenes)
+
       if (autoStockEnabled) {
         setProcessingStage('matching-stock')
-        setProcessingProgress({
-          completed: 0,
-          total: scenes.length,
-          matched: 0,
-          message: 'Searching Pexels for each scene',
-        })
-        try {
-          const stockResult = await window.rhymx.autoMatchPexelsVideos(
-            scenes,
-            apiKeys.pexels
-          )
-          scenes = stockResult.scenes
-          setEditorNotice(
-            stockResult.unmatchedCount === 0
-              ? `Pexels matched all ${stockResult.matchedCount} scenes automatically.`
-              : `Pexels matched ${stockResult.matchedCount} of ${scenes.length} scenes. Unmatched scenes are ready for manual media.`
-          )
-        } catch (stockError) {
-          const message =
-            stockError instanceof Error ? stockError.message : String(stockError)
-          setEditorNotice(
-            `Transcription succeeded, but automatic Pexels matching could not finish: ${message}`
-          )
-        }
+        setProcessingProgress({ completed: 0, total: scenes.length, matched: 0, message: 'Searching free media across providers' })
+        const matches = await window.rhymx.autoMatchScenes(scenes)
+        setPendingMatches(matches)
+        setIsProcessingAudio(false)
+        setScreen('approval')
+        return
       }
-      setScenes(scenes, subtitleTimingScenes)
+
+      setEditorNotice('Transcription complete. Your word timing and visual search phrases are ready.')
       setProcessingStage('saving')
       setIsProcessingAudio(false)
       setScreen('editor')
       const project = getProjectDocument()
       if (project) await window.rhymx.saveProject(project)
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason)
       setIsProcessingAudio(false)
-      setProcessingError(message)
+      setProcessingError(reason instanceof Error ? reason.message : String(reason))
     }
+  }
+
+  const goBack = () => {
+    setScreen('projects')
+    window.history.pushState({}, '', '/app')
+    window.dispatchEvent(new PopStateEvent('popstate'))
   }
 
   return (
     <div className="min-h-screen bg-[#0b0d12] text-white flex flex-col">
-      <header className="h-20 border-b border-white/5 flex items-center px-10">
-        <button
-          onClick={() => setScreen('projects')}
-          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Projects
-        </button>
-      </header>
-
-      <main className="flex-1 flex items-center justify-center p-8">
+      <header className="h-20 border-b border-white/5 flex items-center px-5 sm:px-10"><button onClick={goBack} className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"><ArrowLeft className="h-4 w-4" />Projects</button></header>
+      <main className="flex-1 flex items-center justify-center p-5 sm:p-8 py-12">
         <div className="w-full max-w-2xl">
-          <div className="text-center mb-8">
-            <div className="h-12 w-12 rounded-2xl bg-violet-500/15 text-violet-300 flex items-center justify-center mx-auto mb-4">
-              <AudioLines className="h-6 w-6" />
+          <div className="text-center mb-8"><div className="h-12 w-12 rounded-2xl bg-violet-500/15 text-violet-300 flex items-center justify-center mx-auto mb-4"><AudioLines className="h-6 w-6" /></div><h1 className="text-3xl font-semibold tracking-tight">Create from voiceover</h1><p className="text-slate-500 mt-2">Import your narration. Rhymx will build timed scenes, captions, and a visual plan.</p></div>
+          <div className="rounded-3xl border border-white/10 bg-[#12141b] p-5 sm:p-7 shadow-2xl shadow-black/30">
+            <label className="block text-xs font-medium text-slate-400 mb-2">Project name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60" /></label>
+            <div onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`mt-5 rounded-2xl border-2 border-dashed px-8 py-10 text-center transition-colors ${isDragging ? 'border-violet-400 bg-violet-500/10' : selectedAudio ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-white/10 bg-white/[0.015]'}`}>
+              {selectedAudio ? <><FileAudio className="h-9 w-9 text-emerald-400 mx-auto mb-3" /><div className="font-medium text-sm truncate">{fileName}</div><div className="text-xs text-slate-500 mt-1">Voiceover ready</div></> : <><FolderOpen className="h-9 w-9 text-slate-500 mx-auto mb-3" /><div className="text-sm font-medium">Drag your voiceover here</div><div className="text-xs text-slate-500 mt-1">MP3, WAV, M4A, AAC, FLAC, OGG or WebM</div></>}
+              <button onClick={browse} className="mt-5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-4 py-2 text-xs transition-colors">{selectedAudio ? 'Choose another file' : 'Browse files'}</button>
             </div>
-            <h1 className="text-3xl font-semibold tracking-tight">Create from voiceover</h1>
-            <p className="text-slate-500 mt-2">
-              Import narration and Rhymx will build timed scenes and subtitles.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-[#12141b] p-6">
-            <label className="block text-xs font-medium text-slate-400 mb-2">Project name</label>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60 mb-5"
-            />
-
-            <div
-              onDragOver={(event) => {
-                event.preventDefault()
-                setIsDragging(true)
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={onDrop}
-              className={`rounded-2xl border-2 border-dashed px-8 py-10 text-center transition-colors ${
-                isDragging
-                  ? 'border-violet-400 bg-violet-500/10'
-                  : selectedAudio
-                    ? 'border-emerald-500/30 bg-emerald-500/5'
-                    : 'border-white/10 bg-white/[0.015]'
-              }`}
-            >
-              {selectedAudio ? (
-                <>
-                  <FileAudio className="h-9 w-9 text-emerald-400 mx-auto mb-3" />
-                  <div className="font-medium text-sm truncate">{fileName}</div>
-                  <div className="text-xs text-slate-500 mt-1">Voiceover ready</div>
-                </>
-              ) : (
-                <>
-                  <FolderOpen className="h-9 w-9 text-slate-500 mx-auto mb-3" />
-                  <div className="text-sm font-medium">Drag your voiceover here</div>
-                  <div className="text-xs text-slate-500 mt-1">MP3, WAV, M4A, AAC, FLAC, OGG or WebM</div>
-                </>
-              )}
-              <button
-                onClick={browse}
-                className="mt-5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-4 py-2 text-xs transition-colors"
-              >
-                {selectedAudio ? 'Choose another file' : 'Browse files'}
-              </button>
-            </div>
-
-            <div className="mt-5">
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-400 mb-2">
-                <KeyRound className="h-3.5 w-3.5" />
-                Groq API key
-              </label>
-              <input
-                type="password"
-                value={apiKeys.groq}
-                onChange={(event) => setApiKeys({ groq: event.target.value })}
-                placeholder="gsk_…"
-                className="w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60"
-              />
-              <p className="text-[11px] text-slate-600 mt-2">
-                Encrypted by the desktop app and sent only to Groq for transcription and scene keywords.
-              </p>
-            </div>
-
-            <div className="mt-5 rounded-xl border border-white/8 bg-black/15 p-4">
-              <label className="flex items-center justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <Video className="h-4 w-4 text-violet-400 mt-0.5" />
-                  <div>
-                    <div className="text-xs font-medium text-slate-300">
-                      Automatically add Pexels stock video
-                    </div>
-                    <div className="text-[10px] text-slate-600 mt-1">
-                      Matches each timed scene using Groq’s recommended search keywords.
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={autoStockEnabled}
-                  onChange={(event) => setAutoStockEnabled(event.target.checked)}
-                  className="h-4 w-4 accent-violet-500"
-                />
-              </label>
-              {autoStockEnabled && (
-                <label className="block mt-4 text-[10px] text-slate-500">
-                  Pexels API key
-                  <input
-                    type="password"
-                    value={apiKeys.pexels}
-                    onChange={(event) => setApiKeys({ pexels: event.target.value })}
-                    placeholder="Required for automatic stock footage"
-                    className="mt-1.5 w-full rounded-xl border border-white/10 bg-[#0c0e13] px-4 py-3 text-sm outline-none focus:border-violet-500/60"
-                  />
-                  <span className="mt-1.5 block text-[9px] text-slate-600">
-                    Pexels and its contributors are credited in the scene inspector.
-                  </span>
-                </label>
-              )}
-            </div>
-
-            <button
-              onClick={createProject}
-              disabled={
-                !selectedAudio ||
-                !apiKeys.groq.trim() ||
-                (autoStockEnabled && !apiKeys.pexels.trim())
-              }
-              className="mt-6 w-full rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed py-3.5 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
-            >
-              <Sparkles className="h-4 w-4" />
-              Create and transcribe
-            </button>
+            <div className="mt-5 rounded-2xl border border-white/8 bg-black/15 p-4"><label className="flex items-center justify-between gap-4"><div className="flex items-start gap-3"><Video className="h-4 w-4 text-violet-400 mt-0.5" /><div><div className="text-xs font-medium text-slate-300">Build a multi-provider visual plan</div><div className="text-[10px] text-slate-600 mt-1 leading-4">Search Pexels, Pixabay, Archive.org, NASA, and Wikimedia, then approve the contact sheet before download.</div></div></div><input type="checkbox" checked={autoStockEnabled} onChange={(event) => { setAutoStockEnabled(event.target.checked); window.rhymx.setAutoStockEnabled(event.target.checked) }} className="h-4 w-4 accent-violet-500" /></label></div>
+            <div className="mt-4 rounded-xl border border-emerald-500/15 bg-emerald-500/[.06] p-3 flex items-start gap-2 text-[10px] text-emerald-100/80 leading-4"><ShieldCheck className="h-4 w-4 shrink-0" />Provider keys are handled by the Rhymx service. No credentials are stored in your project or browser.</div>
+            <button onClick={createProject} disabled={!selectedAudio} className="mt-6 w-full rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed py-3.5 text-sm font-medium flex items-center justify-center gap-2 transition-colors"><Sparkles className="h-4 w-4" />Create and transcribe</button>
           </div>
         </div>
       </main>

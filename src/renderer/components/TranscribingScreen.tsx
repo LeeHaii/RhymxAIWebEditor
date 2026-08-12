@@ -97,7 +97,7 @@ export default function TranscribingScreen() {
               <div className="h-4 w-4 rounded-full border border-slate-700" />
             )}
             <span className="flex-1">
-              Matching scenes with Pexels stock footage
+              Matching scenes across free media providers
               {processingStage === 'matching-stock' && processingProgress.total > 0 && (
                 <span className="block text-[10px] text-slate-500 mt-0.5">
                   {processingProgress.completed}/{processingProgress.total} searched ·{' '}

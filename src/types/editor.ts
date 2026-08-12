@@ -1,16 +1,112 @@
-export type AppScreen = 'projects' | 'new-project' | 'transcribing' | 'editor'
+export type AppScreen =
+  | 'projects'
+  | 'new-project'
+  | 'transcribing'
+  | 'approval'
+  | 'editor'
 
 export type MediaKind = 'video' | 'image' | 'music' | 'sfx'
 
+export type MediaProvider =
+  | 'pexels'
+  | 'pixabay'
+  | 'archive_org'
+  | 'nasa'
+  | 'wikimedia'
+
+export type MediaType =
+  | 'local_image'
+  | 'local_video'
+  | 'remote_image'
+  | 'remote_video'
+  | 'motion_graphic'
+
+export interface MediaLicense {
+  name: string
+  url?: string
+  attributionRequired: boolean
+  attributionText?: string
+  shareAlike?: boolean
+  warning?: string
+}
+
+export interface MediaProvenance {
+  provider: MediaProvider | 'local' | 'youtube' | 'rhymx'
+  sourceId: string
+  landingPageUrl?: string
+  creator?: string
+  creatorUrl?: string
+  license?: MediaLicense
+  acquiredAt?: string
+}
+
+export interface MediaCandidate {
+  id: string
+  provider: MediaProvider
+  kind: 'image' | 'video'
+  title: string
+  thumbnailUrl: string
+  previewUrl: string
+  downloadUrl?: string
+  landingPageUrl: string
+  width?: number
+  height?: number
+  durationSec?: number
+  fileSizeBytes?: number
+  creator?: string
+  creatorUrl?: string
+  license?: MediaLicense
+  score?: number
+  compatibility?: 'ready' | 'resolve' | 'unsupported'
+}
+
+export interface CaptionWord {
+  id: string
+  text: string
+  startTimeSec: number
+  endTimeSec: number
+  confidence?: number
+}
+
+export type CaptionMode =
+  | 'sentence'
+  | 'active-word'
+  | 'karaoke'
+  | 'word'
+  | 'phrase'
+  | 'keywords'
+
+export type MotionEngine = 'remotion' | 'hyperframes'
+
+export interface MotionSceneConfig {
+  templateId: string
+  templateVersion: number
+  engine: MotionEngine
+  values: Record<string, string | number | boolean>
+  accentColor?: string
+}
+
+export interface MotionTemplateField {
+  id: string
+  label: string
+  type: 'text' | 'number' | 'color' | 'boolean'
+  defaultValue: string | number | boolean
+}
+
+export interface MotionTemplateManifest {
+  id: string
+  version: number
+  name: string
+  category: string
+  engine: MotionEngine
+  defaultDurationSec: number
+  supportsTransparency: boolean
+  fields: MotionTemplateField[]
+}
+
 export interface MediaAsset {
   id: string
-  type:
-    | 'pexels_video'
-    | 'youtube_clip'
-    | 'google_image'
-    | 'duckduckgo_image'
-    | 'local_video'
-    | 'local_image'
+  type: MediaType
   kind?: MediaKind
   sourceUrl: string
   previewSourceUrl?: string
@@ -22,6 +118,8 @@ export interface MediaAsset {
   providerUrl?: string
   creatorName?: string
   creatorUrl?: string
+  provenance?: MediaProvenance
+  motion?: MotionSceneConfig
   providerStartSec?: number
   imageFit?: 'cover' | 'contain'
   enableKenBurnsEffect?: boolean
@@ -41,6 +139,7 @@ export interface LibraryAsset {
   providerStartSec?: number
   missing?: boolean
   missingReason?: string
+  provenance?: MediaProvenance
 }
 
 export interface TimelineAudioClip {
@@ -80,6 +179,11 @@ export interface SubtitleSettings {
   outlineColor: string
   outlineWidth: number
   position: 'bottom' | 'center'
+  mode: CaptionMode
+  activeWordColor: string
+  maximumCharactersPerLine: number
+  minimumDisplayDurationSec: number
+  maximumDisplayDurationSec: number
 }
 
 export interface SubtitleSegment {
@@ -87,6 +191,7 @@ export interface SubtitleSegment {
   startTimeSec: number
   endTimeSec: number
   text: string
+  words?: CaptionWord[]
 }
 
 export interface SceneSegment {
@@ -101,6 +206,15 @@ export interface SceneSegment {
   volume: number
   scale: number
   opacity: number
+  words?: CaptionWord[]
+  suggestedTreatment?: 'media' | 'motion'
+}
+
+export interface SceneMediaMatch {
+  sceneId: string
+  query: string
+  candidates: MediaCandidate[]
+  confidence: 'strong' | 'review' | 'none'
 }
 
 export interface ProjectDocument {
@@ -123,6 +237,7 @@ export interface ProjectDocument {
     previousTimelineDuration: number
     actualAudioDuration: number
   }
+  captionWords?: CaptionWord[]
 }
 
 export interface ProjectSummary {
@@ -161,6 +276,20 @@ export interface PexelsAutoMatchResult {
   matchedCount: number
   unmatchedCount: number
   warnings: string[]
+}
+
+export interface MediaSearchRequest {
+  query: string
+  providers?: MediaProvider[]
+  kind?: 'all' | 'image' | 'video'
+  orientation?: 'any' | 'landscape' | 'portrait' | 'square'
+  page?: number
+}
+
+export interface MediaSearchResponse {
+  candidates: MediaCandidate[]
+  errors: Array<{ provider: MediaProvider; message: string }>
+  nextPage?: number
 }
 
 export interface ImportedFile {
@@ -242,7 +371,7 @@ export interface RhymxPlatformAPI {
   openAudioFile: () => Promise<{ path: string; duration: number } | null>
   openMediaFiles: () => Promise<ImportedFile[]>
   getMediaDuration: (filePath: string) => Promise<number | null>
-  transcribeAudio: (filePath: string, apiKey: string) => Promise<SceneSegment[]>
+  transcribeAudio: (filePath: string, apiKey?: string) => Promise<SceneSegment[]>
   onTranscriptionProgress: (
     callback: (progress: TranscriptionProgress) => void
   ) => void
@@ -250,6 +379,16 @@ export interface RhymxPlatformAPI {
     scenes: SceneSegment[],
     apiKey: string
   ) => Promise<PexelsAutoMatchResult>
+  autoMatchScenes: (
+    scenes: SceneSegment[],
+    providers?: MediaProvider[]
+  ) => Promise<SceneMediaMatch[]>
+  searchMedia: (request: MediaSearchRequest) => Promise<MediaSearchResponse>
+  resolveMedia: (candidate: MediaCandidate) => Promise<MediaCandidate>
+  acquireMedia: (candidate: MediaCandidate) => Promise<LibraryAsset>
+  onAssetAcquisitionProgress: (
+    callback: (progress: { candidateId: string; percent: number }) => void
+  ) => void
   onPexelsAutoMatchProgress: (
     callback: (progress: PexelsAutoMatchProgress) => void
   ) => void

@@ -32,6 +32,11 @@ const defaultSubtitleSettings: SubtitleSettings = {
   outlineColor: '#000000',
   outlineWidth: 3,
   position: 'bottom',
+  mode: 'sentence',
+  activeWordColor: '#c4b5fd',
+  maximumCharactersPerLine: 42,
+  minimumDisplayDurationSec: 0.7,
+  maximumDisplayDurationSec: 6,
 }
 
 const defaultTrackSettings: TrackSettings = { muted: false, visible: true }
@@ -157,9 +162,7 @@ const SceneContent: React.FC<{
   let transform = 'none'
   if (
     media &&
-    (media.type === 'google_image' ||
-      media.type === 'duckduckgo_image' ||
-      media.type === 'local_image') &&
+    (media.type === 'remote_image' || media.type === 'local_image') &&
     media.enableKenBurnsEffect
   ) {
     const durationFrames = Math.round(scene.durationSec * fps)
@@ -170,9 +173,7 @@ const SceneContent: React.FC<{
   }
 
   const isVideo =
-    media?.type === 'pexels_video' ||
-    media?.type === 'youtube_clip' ||
-    media?.type === 'local_video'
+    media?.type === 'remote_video' || media?.type === 'local_video'
   const videoSource =
     mediaMode === 'preview' && media?.previewSourceUrl
       ? media.previewSourceUrl
@@ -223,6 +224,8 @@ const SceneContent: React.FC<{
             Add media to this scene
           </div>
         </AbsoluteFill>
+      ) : media.type === 'motion_graphic' && media.motion ? (
+        <MotionGraphicContent scene={scene} />
       ) : isVideo ? (
         mediaMode === 'preview' ? (
           <Html5Video
@@ -262,7 +265,28 @@ const SubtitleContent: React.FC<{
   subtitle: SubtitleSegment
   settings: SubtitleSettings
   renderScale: number
-}> = ({ subtitle, settings, renderScale }) => (
+}> = ({ subtitle, settings, renderScale }) => {
+  const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const currentTimeSec = subtitle.startTimeSec + frame / fps
+  const words = subtitle.words || []
+  const activeIndex = words.findIndex(
+    (word) =>
+      currentTimeSec >= word.startTimeSec && currentTimeSec < word.endTimeSec
+  )
+  const phraseStart = activeIndex < 0 ? 0 : Math.floor(activeIndex / 3) * 3
+  const phrase = words.slice(phraseStart, phraseStart + 3)
+  const visibleWords =
+    settings.mode === 'word'
+      ? activeIndex >= 0
+        ? [words[activeIndex]]
+        : words.slice(0, 1)
+      : settings.mode === 'phrase'
+        ? phrase
+        : words
+  const fallbackText = subtitle.text
+
+  return (
   <AbsoluteFill
     style={{
       justifyContent: settings.position === 'center' ? 'center' : 'flex-end',
@@ -293,10 +317,143 @@ const SubtitleContent: React.FC<{
         paintOrder: 'stroke fill',
       }}
     >
-      {subtitle.text}
+      {visibleWords.length > 0 && settings.mode !== 'sentence'
+        ? visibleWords.map((word, index) => {
+            const absoluteIndex =
+              settings.mode === 'phrase' ? phraseStart + index :
+              settings.mode === 'word' ? activeIndex : index
+            const active = absoluteIndex === activeIndex
+            const completed = absoluteIndex < activeIndex
+            const emphasized =
+              settings.mode === 'keywords' && word.text.replace(/\W/g, '').length >= 7
+            return (
+              <React.Fragment key={word.id}>
+                <span
+                  style={{
+                    color:
+                      active || emphasized || (settings.mode === 'karaoke' && completed)
+                        ? settings.activeWordColor
+                        : settings.textColor,
+                    fontWeight: active || emphasized ? 850 : settings.fontWeight,
+                    opacity:
+                      settings.mode === 'active-word' && !active ? 0.58 : 1,
+                  }}
+                >
+                  {word.text}
+                </span>{' '}
+              </React.Fragment>
+            )
+          })
+        : fallbackText}
     </p>
   </AbsoluteFill>
-)
+  )
+}
+
+const MotionGraphicContent: React.FC<{ scene: SceneSegment }> = ({ scene }) => {
+  const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const motion = scene.media?.motion
+  if (!motion) return null
+  const values = motion.values
+  const progress = Math.min(1, frame / Math.max(1, fps * 0.8))
+  const exit = Math.min(
+    1,
+    Math.max(0, (frame - scene.durationSec * fps + fps * 0.55) / (fps * 0.55))
+  )
+  const eased = 1 - Math.pow(1 - progress, 3)
+  const accent = motion.accentColor || String(values.accent || '#8b5cf6')
+  const title = String(values.title || values.label || 'Make the idea move')
+  const body = String(values.body || values.value || 'Rhymx')
+  const isAdvanced = motion.engine === 'hyperframes'
+  const background = isAdvanced
+    ? `radial-gradient(circle at ${20 + progress * 50}% 30%, ${accent}66 0%, transparent 34%), linear-gradient(135deg, #070811, #151126 55%, #08090d)`
+    : `linear-gradient(135deg, #0a0b10, ${accent}33 54%, #090a0e)`
+
+  if (motion.templateId === 'progress_bar') {
+    const target = Math.max(0, Math.min(100, Number(values.value || 72)))
+    return (
+      <AbsoluteFill style={{ background, justifyContent: 'center', padding: 140 }}>
+        <div style={{ color: '#a6adbd', fontSize: 30, marginBottom: 30 }}>{title}</div>
+        <div style={{ height: 32, borderRadius: 99, background: '#ffffff14', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${target * eased}%`, background: accent, borderRadius: 99 }} />
+        </div>
+        <div style={{ color: 'white', fontSize: 86, fontWeight: 800, marginTop: 28 }}>
+          {Math.round(target * eased)}%
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'quote') {
+    return (
+      <AbsoluteFill style={{ background, justifyContent: 'center', padding: '11%' }}>
+        <div style={{ color: accent, fontSize: 90, lineHeight: 0.5 }}>“</div>
+        <div style={{ color: 'white', fontSize: 62, lineHeight: 1.18, fontWeight: 650, maxWidth: 1450 }}>
+          {title}
+        </div>
+        <div style={{ color: '#b5bbc9', fontSize: 28, marginTop: 36 }}>{body}</div>
+      </AbsoluteFill>
+    )
+  }
+
+  return (
+    <AbsoluteFill
+      style={{
+        background,
+        justifyContent: 'center',
+        alignItems: isAdvanced ? 'flex-start' : 'center',
+        padding: '10%',
+        overflow: 'hidden',
+      }}
+    >
+      {isAdvanced && (
+        <div
+          style={{
+            position: 'absolute',
+            width: 760,
+            height: 760,
+            right: -120 + frame * 1.6,
+            top: -220,
+            border: `1px solid ${accent}88`,
+            borderRadius: '46% 54% 61% 39%',
+            transform: `rotate(${frame * 0.45}deg)`,
+          }}
+        />
+      )}
+      <div
+        style={{
+          color: accent,
+          fontSize: 22,
+          fontWeight: 750,
+          letterSpacing: 6,
+          textTransform: 'uppercase',
+          opacity: eased,
+        }}
+      >
+        {motion.engine === 'hyperframes' ? 'Advanced motion' : 'Integrated motion'}
+      </div>
+      <div
+        style={{
+          color: 'white',
+          fontSize: isAdvanced ? 106 : 88,
+          lineHeight: 0.98,
+          fontWeight: 850,
+          maxWidth: 1500,
+          textAlign: isAdvanced ? 'left' : 'center',
+          marginTop: 28,
+          transform: `translateY(${(1 - eased) * 90 - exit * 40}px) scale(${0.92 + eased * 0.08})`,
+          opacity: 1 - exit,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ color: '#b6bdca', fontSize: 34, marginTop: 30, opacity: eased * (1 - exit) }}>
+        {body}
+      </div>
+    </AbsoluteFill>
+  )
+}
 
 function colorWithOpacity(color: string, opacity: number) {
   const normalized = color.replace('#', '')

@@ -182,7 +182,7 @@ export async function autoMatchPexelsVideos(
             const sources = selectPexelsVideoSources(selected.video_files)
             scene.media = {
               id: `pexels_auto_${selected.id}_${scene.id}`,
-              type: 'pexels_video',
+              type: 'remote_video',
               kind: 'video',
               sourceUrl: sources.sourceUrl,
               previewSourceUrl: sources.previewSourceUrl,
@@ -193,6 +193,19 @@ export async function autoMatchPexelsVideos(
               providerUrl: selected.url,
               creatorName,
               creatorUrl: selected.user?.url,
+              provenance: {
+                provider: 'pexels',
+                sourceId: String(selected.id),
+                landingPageUrl: selected.url,
+                creator: creatorName,
+                creatorUrl: selected.user?.url,
+                license: {
+                  name: 'Pexels license',
+                  url: 'https://www.pexels.com/license/',
+                  attributionRequired: false,
+                  attributionText: `Video by ${creatorName} on Pexels`,
+                },
+              },
             }
             matched += 1
           } else {
