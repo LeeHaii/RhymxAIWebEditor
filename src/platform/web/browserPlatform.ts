@@ -1,4 +1,6 @@
 import {
+  ApiKeyProvider,
+  ApiKeyTestResult,
   AppSettings,
   BatchExportProgress,
   BatchExportRequest,
@@ -12,6 +14,10 @@ import {
   MediaProvider,
   MediaSearchRequest,
   MediaSearchResponse,
+  MotionRenderAsset,
+  MotionRendererHealth,
+  MotionRenderProgress,
+  MotionRenderRequest,
   PexelsAutoMatchProgress,
   PexelsAutoMatchResult,
   ProjectDocument,
@@ -38,16 +44,69 @@ import {
 
 const GROQ_ROOT = 'https://api.groq.com/openai/v1'
 const SETTINGS_KEY = 'rhymx.web.settings'
-const sessionKeys = new Map<string, string>()
+const REMEMBERED_KEYS_KEY = 'rhymx.web.apiKeys.remembered'
+const SESSION_KEYS_KEY = 'rhymx.web.apiKeys.session'
+const MOTION_RENDERER_ORIGIN = 'http://127.0.0.1:43127'
+const API_KEY_PROVIDERS: ApiKeyProvider[] = ['groq', 'pexels', 'youtube']
 const exportTargets = new Map<string, FileSystemFileHandle>()
 const batchTargets = new Map<string, FileSystemDirectoryHandle>()
 let exportController: AbortController | null = null
 let batchCancelled = false
+let motionSessionToken = ''
+let activeMotionJobId: string | null = null
+let motionAbortController: AbortController | null = null
 let transcriptionListener: (progress: TranscriptionProgress) => void = () => undefined
 let pexelsListener: (progress: PexelsAutoMatchProgress) => void = () => undefined
 let exportListener: (progress: number) => void = () => undefined
 let batchListener: (progress: BatchExportProgress) => void = () => undefined
 let acquisitionListener: (progress: { candidateId: string; percent: number }) => void = () => undefined
+let motionListener: (progress: MotionRenderProgress) => void = () => undefined
+
+type StoredApiKeys = Partial<Record<ApiKeyProvider, string>>
+
+function parsedStorage(storage: Storage, key: string): StoredApiKeys {
+  try {
+    const value = JSON.parse(storage.getItem(key) || '{}') as StoredApiKeys
+    return Object.fromEntries(
+      API_KEY_PROVIDERS.flatMap((provider) =>
+        typeof value[provider] === 'string' ? [[provider, value[provider]]] : []
+      )
+    ) as StoredApiKeys
+  } catch {
+    return {}
+  }
+}
+
+function rememberApiKeys() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as Partial<AppSettings>
+    return stored.rememberApiKeys ?? true
+  } catch {
+    return true
+  }
+}
+
+function storedApiKeys() {
+  return rememberApiKeys()
+    ? parsedStorage(localStorage, REMEMBERED_KEYS_KEY)
+    : parsedStorage(sessionStorage, SESSION_KEYS_KEY)
+}
+
+function apiKeyFor(provider: ApiKeyProvider) {
+  return storedApiKeys()[provider]?.trim() || ''
+}
+
+function setStoredApiKey(provider: ApiKeyProvider, value: string) {
+  const storage = rememberApiKeys() ? localStorage : sessionStorage
+  const key = rememberApiKeys() ? REMEMBERED_KEYS_KEY : SESSION_KEYS_KEY
+  const next = { ...parsedStorage(storage, key), [provider]: value }
+  if (value) storage.setItem(key, JSON.stringify(next))
+  else {
+    delete next[provider]
+    if (Object.keys(next).length) storage.setItem(key, JSON.stringify(next))
+    else storage.removeItem(key)
+  }
+}
 
 function requestResult<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -68,6 +127,7 @@ function projectSources(project: ProjectDocument) {
     ...project.audioClips.map((clip) => clip.path),
     ...project.scenes.map((scene) => scene.media?.sourceUrl),
     ...project.scenes.map((scene) => scene.media?.previewSourceUrl),
+    ...project.scenes.map((scene) => scene.media?.motion?.renderedAssetPath),
   ].filter((source): source is string => Boolean(source))
 }
 
@@ -273,9 +333,11 @@ async function backendRequest<T>(path: string, init?: RequestInit) {
   return (await response.json()) as T
 }
 
-async function transcribeAudio(source: string, _apiKey = '') {
+async function transcribeAudio(source: string, suppliedApiKey = '') {
   const file = await fileForSource(source)
   if (!file) throw new Error('The selected voiceover is no longer available. Re-select it and try again.')
+  const apiKey = suppliedApiKey.trim() || apiKeyFor('groq')
+  if (!apiKey) throw new Error('Add a Groq API key in Settings before transcribing.')
   transcriptionListener({ stage: 'preparing', completed: 0, total: 1, message: 'Preparing voiceover in your browser' })
   const form = new FormData()
   form.append('file', file, file.name)
@@ -284,27 +346,32 @@ async function transcribeAudio(source: string, _apiKey = '') {
   form.append('timestamp_granularities[]', 'word')
   form.append('timestamp_granularities[]', 'segment')
   transcriptionListener({ stage: 'transcribing', completed: 0, total: 1, message: 'Transcribing with Groq Whisper' })
-  const result = await backendRequest<{
+  const result = await groqRequest<{
     duration?: number
     words?: GroqWord[]
     segments?: GroqSegment[]
-  }>('/api/transcriptions', { method: 'POST', body: form })
+  }>('/audio/transcriptions', apiKey, { method: 'POST', body: form })
   let scenes = scenesFromTranscript(result.words || [], result.segments || [], result.duration || (await mediaDuration(source)) || 0)
   if (!scenes.length) throw new Error('Groq Whisper returned an empty transcript.')
   transcriptionListener({ stage: 'keywords', completed: 0, total: 1, message: 'Generating visual search phrases' })
   try {
-    const keywordResult = await backendRequest<{
-      keywords?: string[][]
-      treatments?: Array<'media' | 'motion'>
-    }>(
-      '/api/keywords', {
+    const prompt = `Return JSON with two arrays: {"keywords":[["two or three concrete visual search phrases"]],"treatments":["media" or "motion"]}. Keep exactly one entry per scene. Prefer motion only for statistics, quotations, abstract transitions, titles, or calls to action. Scenes: ${JSON.stringify(scenes.map((scene) => scene.transcriptText))}`
+    const response = await groqRequest<{
+      choices?: Array<{ message?: { content?: string } }>
+    }>('/chat/completions', apiKey, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scenes: scenes.map((scene) => scene.transcriptText),
+          model: 'llama-3.1-8b-instant',
+          temperature: 0.2,
+          response_format: { type: 'json_object' },
+          messages: [{ role: 'user', content: prompt }],
         }),
-      }
-    )
+      })
+    const keywordResult = JSON.parse(response.choices?.[0]?.message?.content || '{}') as {
+      keywords?: string[][]
+      treatments?: Array<'media' | 'motion'>
+    }
     scenes = scenes.map((scene, index) => ({
       ...scene,
       keywords: keywordResult.keywords?.[index]?.slice(0, 3) || [],
@@ -434,17 +501,27 @@ async function searchYouTube(query: string, apiKey: string): Promise<YouTubeSear
 }
 
 async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResponse> {
-  return backendRequest<MediaSearchResponse>('/api/media/search', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Rhymx-Actor': anonymousActorId(),
-    },
-    body: JSON.stringify(request),
-  })
+  const localHostname = ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  if (!localHostname) {
+    try {
+      return await backendRequest<MediaSearchResponse>('/api/media/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rhymx-Actor': anonymousActorId(),
+        },
+        body: JSON.stringify(request),
+      })
+    } catch {
+      // A static or disconnected deployment can still use BYOK and keyless sources.
+    }
+  }
+  return localMediaSearch(request)
 }
 
 async function resolveMedia(candidate: MediaCandidate) {
+  if (candidate.downloadUrl) return candidate
+  if (['pexels', 'wikimedia'].includes(candidate.provider)) return candidate
   return backendRequest<MediaCandidate>('/api/media/resolve', {
     method: 'POST',
     headers: {
@@ -453,6 +530,142 @@ async function resolveMedia(candidate: MediaCandidate) {
     },
     body: JSON.stringify({ candidate }),
   })
+}
+
+async function localPexelsCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
+  const key = apiKeyFor('pexels')
+  if (!key) throw new Error('Add a Pexels API key in Settings to search Pexels locally.')
+  const page = Math.max(1, request.page || 1)
+  const orientation = request.orientation && request.orientation !== 'any'
+    ? `&orientation=${encodeURIComponent(request.orientation)}`
+    : ''
+  const candidates: MediaCandidate[] = []
+  if (request.kind !== 'image') {
+    const response = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(request.query)}&per_page=16&page=${page}${orientation}`, {
+      headers: { Authorization: key },
+    })
+    if (!response.ok) throw new Error(`Pexels video search failed (${response.status}).`)
+    const body = (await response.json()) as {
+      videos?: Array<{
+        id: number
+        duration: number
+        url: string
+        image?: string
+        width?: number
+        height?: number
+        user?: { name?: string; url?: string }
+        video_files?: Array<{ link: string; width?: number; height?: number; file_type?: string }>
+      }>
+    }
+    for (const video of body.videos || []) {
+      const sources = selectPexelsVideoSources(video.video_files)
+      if (!sources.sourceUrl) continue
+      candidates.push({
+        id: String(video.id),
+        provider: 'pexels',
+        kind: 'video',
+        title: request.query,
+        thumbnailUrl: video.image || '',
+        previewUrl: sources.previewSourceUrl || sources.sourceUrl,
+        downloadUrl: sources.sourceUrl,
+        landingPageUrl: video.url,
+        width: video.width,
+        height: video.height,
+        durationSec: video.duration,
+        creator: video.user?.name,
+        creatorUrl: video.user?.url,
+        compatibility: 'ready',
+        license: {
+          name: 'Pexels license',
+          url: 'https://www.pexels.com/license/',
+          attributionRequired: false,
+        },
+      })
+    }
+  }
+  if (request.kind !== 'video') {
+    const response = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(request.query)}&per_page=16&page=${page}${orientation}`, {
+      headers: { Authorization: key },
+    })
+    if (!response.ok) throw new Error(`Pexels image search failed (${response.status}).`)
+    const body = (await response.json()) as {
+      photos?: Array<{
+        id: number
+        width?: number
+        height?: number
+        alt?: string
+        url: string
+        photographer?: string
+        photographer_url?: string
+        src?: { large2x?: string; large?: string; medium?: string }
+      }>
+    }
+    for (const photo of body.photos || []) {
+      const source = photo.src?.large2x || photo.src?.large || photo.src?.medium
+      if (!source) continue
+      candidates.push({
+        id: String(photo.id),
+        provider: 'pexels',
+        kind: 'image',
+        title: photo.alt || request.query,
+        thumbnailUrl: photo.src?.medium || source,
+        previewUrl: photo.src?.large || source,
+        downloadUrl: source,
+        landingPageUrl: photo.url,
+        width: photo.width,
+        height: photo.height,
+        creator: photo.photographer,
+        creatorUrl: photo.photographer_url,
+        compatibility: 'ready',
+        license: {
+          name: 'Pexels license',
+          url: 'https://www.pexels.com/license/',
+          attributionRequired: false,
+        },
+      })
+    }
+  }
+  return candidates
+}
+
+async function localWikimediaCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
+  if (request.kind === 'video') return []
+  const images = await searchWikimedia(request.query)
+  return images.map((image) => ({
+    id: image.id.replace(/^wikimedia_/, ''),
+    provider: 'wikimedia',
+    kind: 'image',
+    title: image.title,
+    thumbnailUrl: image.thumbnailUrl,
+    previewUrl: image.sourceUrl,
+    downloadUrl: image.sourceUrl,
+    landingPageUrl: `https://commons.wikimedia.org/wiki/Special:Redirect/file/${encodeURIComponent(image.title)}`,
+    compatibility: 'ready',
+    license: {
+      name: 'Wikimedia source metadata',
+      url: 'https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia',
+      attributionRequired: true,
+      warning: 'Verify the license and attribution on the source page before publishing.',
+    },
+  }))
+}
+
+async function localMediaSearch(request: MediaSearchRequest): Promise<MediaSearchResponse> {
+  const providers: MediaProvider[] = request.providers?.length
+    ? request.providers
+    : ['pexels', 'wikimedia']
+  const candidates: MediaCandidate[] = []
+  const errors: MediaSearchResponse['errors'] = []
+  for (const provider of providers) {
+    try {
+      if (provider === 'pexels') candidates.push(...await localPexelsCandidates(request))
+      else if (provider === 'wikimedia') candidates.push(...await localWikimediaCandidates(request))
+      else errors.push({ provider, message: `${provider} requires the hosted provider worker in this branch.` })
+    } catch (error) {
+      errors.push({ provider, message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return { candidates, errors, nextPage: candidates.length ? (request.page || 1) + 1 : undefined }
 }
 
 function anonymousActorId() {
@@ -637,13 +850,75 @@ async function acquireMedia(candidate: MediaCandidate) {
 }
 
 function settings(): AppSettings {
-  const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as Partial<AppSettings>
+  let stored: Partial<AppSettings> = {}
+  try {
+    stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as Partial<AppSettings>
+  } catch {
+    // Invalid old settings should not keep the local editor from opening.
+  }
   return {
     projectsDirectory: 'Browser storage',
     defaultProjectsDirectory: 'Browser storage',
     autoStockEnabled: stored.autoStockEnabled ?? true,
+    rememberApiKeys: stored.rememberApiKeys ?? true,
     cacheSizeBytes: 0,
   }
+}
+
+function persistSettings(next: AppSettings) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+    autoStockEnabled: next.autoStockEnabled,
+    rememberApiKeys: next.rememberApiKeys,
+  }))
+}
+
+async function setRememberApiKeys(remember: boolean) {
+  const currentKeys = storedApiKeys()
+  const next = { ...settings(), rememberApiKeys: remember }
+  persistSettings(next)
+  const destination = remember ? localStorage : sessionStorage
+  const destinationKey = remember ? REMEMBERED_KEYS_KEY : SESSION_KEYS_KEY
+  const source = remember ? sessionStorage : localStorage
+  const sourceKey = remember ? SESSION_KEYS_KEY : REMEMBERED_KEYS_KEY
+  if (Object.keys(currentKeys).length) destination.setItem(destinationKey, JSON.stringify(currentKeys))
+  else destination.removeItem(destinationKey)
+  source.removeItem(sourceKey)
+  return next
+}
+
+async function testApiKey(provider: ApiKeyProvider, suppliedKey: string): Promise<ApiKeyTestResult> {
+  const key = suppliedKey.trim()
+  if (!key) return { ok: false, message: 'Enter a key before testing it.' }
+  try {
+    let response: Response
+    if (provider === 'groq') {
+      response = await fetch(`${GROQ_ROOT}/models`, { headers: { Authorization: `Bearer ${key}` } })
+    } else if (provider === 'pexels') {
+      response = await fetch('https://api.pexels.com/v1/curated?per_page=1', { headers: { Authorization: key } })
+    } else {
+      response = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${encodeURIComponent(key)}`)
+    }
+    if (response.ok) return { ok: true, message: `${providerLabel(provider)} accepted this key.` }
+    let detail = ''
+    try {
+      const body = await response.json() as { error?: { message?: string }; message?: string }
+      detail = body.error?.message || body.message || ''
+    } catch {
+      detail = (await response.text()).slice(0, 160)
+    }
+    return {
+      ok: false,
+      message: `${providerLabel(provider)} rejected the key (${response.status})${detail ? `: ${detail}` : '.'}`,
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function providerLabel(provider: ApiKeyProvider) {
+  if (provider === 'groq') return 'Groq'
+  if (provider === 'pexels') return 'Pexels'
+  return 'YouTube'
 }
 
 async function encoderCapabilities(): Promise<EncoderCapabilities> {
@@ -675,18 +950,256 @@ async function chooseExportPath(defaultName: string) {
   return defaultName
 }
 
+type LocalMotionJob = {
+  id: string
+  cacheKey: string
+  status: 'queued' | 'rendering' | 'complete' | 'failed' | 'cancelled'
+  progress: number
+  message?: string
+  cached?: boolean
+  error?: string
+  renderedAt?: string
+}
+
+function motionStatus(job: LocalMotionJob): MotionRenderProgress {
+  return {
+    jobId: job.id,
+    status: job.status,
+    progress: Math.max(0, Math.min(100, job.progress || 0)),
+    message: job.message || job.error,
+  }
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 2500) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abort = () => controller.abort()
+  init.signal?.addEventListener('abort', abort, { once: true })
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeout)
+    init.signal?.removeEventListener('abort', abort)
+  }
+}
+
+async function ensureMotionSession() {
+  if (motionSessionToken) return motionSessionToken
+  const response = await fetchWithTimeout(`${MOTION_RENDERER_ORIGIN}/session`, {
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) throw new Error(`Local HyperFrames renderer is unavailable (${response.status}).`)
+  const body = await response.json() as { token?: string }
+  if (!body.token) throw new Error('Local HyperFrames renderer did not issue a session token.')
+  motionSessionToken = body.token
+  return motionSessionToken
+}
+
+async function motionRequest(path: string, init: RequestInit = {}, timeoutMs = 10_000) {
+  const token = await ensureMotionSession()
+  const response = await fetchWithTimeout(`${MOTION_RENDERER_ORIGIN}${path}`, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...init.headers,
+    },
+  }, timeoutMs)
+  if (response.status === 401) motionSessionToken = ''
+  return response
+}
+
+async function getMotionRendererHealth(): Promise<MotionRendererHealth> {
+  try {
+    const response = await fetchWithTimeout(`${MOTION_RENDERER_ORIGIN}/health`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) throw new Error(`Health check failed (${response.status}).`)
+    const health = await response.json() as MotionRendererHealth
+    return { ...health, available: health.available !== false }
+  } catch (error) {
+    return {
+      available: false,
+      message: error instanceof Error && error.name === 'AbortError'
+        ? 'The local renderer did not respond. Start it with npm run dev:motion.'
+        : 'Start the local renderer with npm run dev:motion.',
+    }
+  }
+}
+
+function sleepWithSignal(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }
+    const timeout = window.setTimeout(finish, milliseconds)
+    const abort = () => {
+      window.clearTimeout(timeout)
+      signal.removeEventListener('abort', abort)
+      reject(new DOMException('Motion render cancelled.', 'AbortError'))
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
+async function renderMotionGraphic(request: MotionRenderRequest): Promise<MotionRenderAsset> {
+  const controller = new AbortController()
+  motionAbortController = controller
+  let job: LocalMotionJob | null = null
+  try {
+    const created = await motionRequest('/renders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    }, 15_000)
+    if (!created.ok) {
+      const body = await created.json().catch(() => ({})) as { error?: string }
+      throw new Error(body.error || `Could not start the local HyperFrames render (${created.status}).`)
+    }
+    job = await created.json() as LocalMotionJob
+    activeMotionJobId = job.id
+    motionListener(motionStatus(job))
+    while (!['complete', 'failed', 'cancelled'].includes(job.status)) {
+      await sleepWithSignal(500, controller.signal)
+      const response = await motionRequest(`/renders/${encodeURIComponent(job.id)}`, {
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`Could not read HyperFrames render progress (${response.status}).`)
+      job = await response.json() as LocalMotionJob
+      motionListener(motionStatus(job))
+    }
+    if (job.status !== 'complete') throw new Error(job.error || job.message || 'HyperFrames render did not complete.')
+    const output = await motionRequest(`/renders/${encodeURIComponent(job.id)}/output`, {
+      signal: controller.signal,
+      headers: { Accept: 'video/mp4' },
+    }, 120_000)
+    if (!output.ok) throw new Error(`Could not download the HyperFrames result (${output.status}).`)
+    const blob = await output.blob()
+    const file = new File([blob], `rhymx-motion-${job.cacheKey}.mp4`, { type: 'video/mp4' })
+    const stored = await storeAsset(file, 'video', undefined, `hyperframes:${job.cacheKey}`)
+    return {
+      ...stored,
+      cacheKey: job.cacheKey,
+      cached: Boolean(job.cached),
+      renderedAt: job.renderedAt || new Date().toISOString(),
+      durationSec: request.durationSec,
+      width: request.width,
+      height: request.height,
+      fps: request.fps,
+    }
+  } catch (error) {
+    if (job?.id && controller.signal.aborted) {
+      void motionRequest(`/renders/${encodeURIComponent(job.id)}`, { method: 'DELETE' }).catch(() => undefined)
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Motion render cancelled.')
+    }
+    throw error
+  } finally {
+    if (activeMotionJobId === job?.id) activeMotionJobId = null
+    if (motionAbortController === controller) motionAbortController = null
+  }
+}
+
+async function cancelMotionRender() {
+  const jobId = activeMotionJobId
+  motionAbortController?.abort()
+  if (!jobId) return Boolean(motionAbortController)
+  try {
+    await motionRequest(`/renders/${encodeURIComponent(jobId)}`, { method: 'DELETE' })
+  } catch {
+    // Aborting the browser-side request is sufficient when the service has stopped.
+  }
+  return true
+}
+
+function motionRenderMatches(
+  scene: SceneSegment,
+  width: number,
+  height: number,
+  fps: number
+) {
+  const motion = scene.media?.motion
+  return Boolean(
+    motion?.renderedAssetPath &&
+      motion.renderedDurationSec === scene.durationSec &&
+      motion.renderedWidth === width &&
+      motion.renderedHeight === height &&
+      motion.renderedFps === fps
+  )
+}
+
+async function prepareMotionScenes(
+  scenes: SceneSegment[],
+  width: number,
+  height: number,
+  fps: number
+) {
+  const prepared: SceneSegment[] = []
+  for (const scene of scenes) {
+    const motion = scene.media?.motion
+    if (!motion || motion.engine !== 'hyperframes') {
+      prepared.push(scene)
+      continue
+    }
+    if (
+      motionRenderMatches(scene, width, height, fps) &&
+      motion.renderedAssetPath &&
+      await fileForSource(motion.renderedAssetPath)
+    ) {
+      prepared.push(scene)
+      continue
+    }
+    const asset = await renderMotionGraphic({
+      templateId: motion.templateId,
+      templateVersion: motion.templateVersion,
+      values: motion.values,
+      accentColor: motion.accentColor,
+      durationSec: scene.durationSec,
+      width,
+      height,
+      fps,
+    })
+    prepared.push({
+      ...scene,
+      media: scene.media ? {
+        ...scene.media,
+        motion: {
+          ...motion,
+          renderedAssetPath: asset.path,
+          renderCacheKey: asset.cacheKey,
+          renderedAt: asset.renderedAt,
+          renderedDurationSec: asset.durationSec,
+          renderedWidth: asset.width,
+          renderedHeight: asset.height,
+          renderedFps: asset.fps,
+        },
+      } : null,
+    })
+  }
+  return prepared
+}
+
 async function exportVideo(request: ExportVideoRequest) {
   const { renderMediaOnWeb } = await import('@remotion/web-renderer')
-  exportController = new AbortController()
-  const duration = Math.max(
-    ...request.scenes.map((scene) => scene.endTimeSec),
-    ...request.subtitles.map((subtitle) => subtitle.endTimeSec),
-    ...request.audioClips.map((clip) => clip.startTimeSec + clip.durationSec),
-    1
-  )
-  const outputHandle = exportTargets.get(request.outputPath)
-  const outputWritable = outputHandle ? await outputHandle.createWritable() : undefined
-  const result = await renderMediaOnWeb({
+  const controller = new AbortController()
+  exportController = controller
+  try {
+    const scenes = request.motionMode === 'fallback'
+      ? request.scenes
+      : await prepareMotionScenes(request.scenes, request.width, request.height, 30)
+    const duration = Math.max(
+      ...scenes.map((scene) => scene.endTimeSec),
+      ...request.subtitles.map((subtitle) => subtitle.endTimeSec),
+      ...request.audioClips.map((clip) => clip.startTimeSec + clip.durationSec),
+      1
+    )
+    const outputHandle = exportTargets.get(request.outputPath)
+    const outputWritable = outputHandle ? await outputHandle.createWritable() : undefined
+    const result = await renderMediaOnWeb({
     composition: {
       id: 'rhymx-export',
       component: MainComposition,
@@ -695,7 +1208,7 @@ async function exportVideo(request: ExportVideoRequest) {
       width: request.width,
       height: request.height,
       defaultProps: {
-        scenes: request.scenes,
+        scenes,
         subtitles: request.subtitles,
         audioPath: request.audioPath,
         audioClips: request.audioClips,
@@ -708,7 +1221,7 @@ async function exportVideo(request: ExportVideoRequest) {
       },
     },
     inputProps: {
-      scenes: request.scenes,
+      scenes,
       subtitles: request.subtitles,
       audioPath: request.audioPath,
       audioClips: request.audioClips,
@@ -723,21 +1236,23 @@ async function exportVideo(request: ExportVideoRequest) {
     hardwareAcceleration: 'no-preference',
     pageResponsiveness: 'medium',
     outputWritable,
-    signal: exportController.signal,
-    onProgress: ({ progress }) => exportListener(progress * 100),
-  })
-  if (!outputWritable) {
-    const blob = await result.getBlob()
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = request.outputPath.replace(/^.*[\\/]/, '') || 'Rhymx video.mp4'
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
+      signal: controller.signal,
+      onProgress: ({ progress }) => exportListener(progress * 100),
+    })
+    if (!outputWritable) {
+      const blob = await result.getBlob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = request.outputPath.replace(/^.*[\\/]/, '') || 'Rhymx video.mp4'
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 30_000)
+    }
+    exportListener(100)
+    return outputHandle?.name || request.outputPath
+  } finally {
+    if (exportController === controller) exportController = null
   }
-  exportController = null
-  exportListener(100)
-  return outputHandle?.name || request.outputPath
 }
 
 async function batchExportProjects(request: BatchExportRequest): Promise<BatchExportResult> {
@@ -811,7 +1326,7 @@ const api: RhymxPlatformAPI = {
   resetProjectsDirectory: async () => settings(),
   setAutoStockEnabled: async (enabled) => {
     const next = { ...settings(), autoStockEnabled: enabled }
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
+    persistSettings(next)
     return next
   },
   clearCache: async () => ({ ...settings(), cacheSizeBytes: await storedAssetBytes() }),
@@ -841,12 +1356,18 @@ const api: RhymxPlatformAPI = {
   batchExportProjects,
   cancelBatchExport: async () => { batchCancelled = true; exportController?.abort(); return true },
   onBatchExportProgress: (callback) => { batchListener = callback },
-  getPexelsKey: async () => sessionKeys.get('pexels') || null,
-  setPexelsKey: async (key) => { sessionKeys.set('pexels', key) },
-  getGroqKey: async () => sessionKeys.get('groq') || null,
-  setGroqKey: async (key) => { sessionKeys.set('groq', key) },
-  getYouTubeKey: async () => sessionKeys.get('youtube') || null,
-  setYouTubeKey: async (key) => { sessionKeys.set('youtube', key) },
+  getPexelsKey: async () => apiKeyFor('pexels') || null,
+  setPexelsKey: async (key) => { setStoredApiKey('pexels', key) },
+  getGroqKey: async () => apiKeyFor('groq') || null,
+  setGroqKey: async (key) => { setStoredApiKey('groq', key) },
+  getYouTubeKey: async () => apiKeyFor('youtube') || null,
+  setYouTubeKey: async (key) => { setStoredApiKey('youtube', key) },
+  setRememberApiKeys,
+  testApiKey,
+  getMotionRendererHealth,
+  renderMotionGraphic,
+  cancelMotionRender,
+  onMotionRenderProgress: (callback) => { motionListener = callback },
 }
 
 export function installBrowserPlatform() {

@@ -84,6 +84,13 @@ export interface MotionSceneConfig {
   engine: MotionEngine
   values: Record<string, string | number | boolean>
   accentColor?: string
+  renderedAssetPath?: string
+  renderCacheKey?: string
+  renderedAt?: string
+  renderedDurationSec?: number
+  renderedWidth?: number
+  renderedHeight?: number
+  renderedFps?: number
 }
 
 export interface MotionTemplateField {
@@ -253,7 +260,54 @@ export interface AppSettings {
   projectsDirectory: string
   defaultProjectsDirectory: string
   autoStockEnabled: boolean
+  rememberApiKeys: boolean
   cacheSizeBytes: number
+}
+
+export type ApiKeyProvider = 'groq' | 'pexels' | 'youtube'
+
+export interface ApiKeyTestResult {
+  ok: boolean
+  message: string
+}
+
+export interface MotionRendererHealth {
+  available: boolean
+  serviceVersion?: string
+  hyperframesVersion?: string
+  nodeVersion?: string
+  ffmpegVersion?: string
+  activeRenders?: number
+  queuedRenders?: number
+  message?: string
+}
+
+export interface MotionRenderRequest {
+  templateId: string
+  templateVersion: number
+  values: Record<string, string | number | boolean>
+  accentColor?: string
+  durationSec: number
+  width: number
+  height: number
+  fps: number
+}
+
+export interface MotionRenderProgress {
+  jobId: string
+  status: 'queued' | 'rendering' | 'complete' | 'failed' | 'cancelled'
+  progress: number
+  message?: string
+}
+
+export interface MotionRenderAsset extends ImportedFile {
+  cacheKey: string
+  cached: boolean
+  renderedAt: string
+  durationSec: number
+  width: number
+  height: number
+  fps: number
 }
 
 export interface PexelsAutoMatchProgress {
@@ -340,6 +394,7 @@ export interface ExportVideoRequest {
   height: number
   videoBitrate: string
   encoder: ExportEncoder
+  motionMode?: 'local' | 'fallback'
 }
 
 export interface BatchExportRequest {
@@ -430,6 +485,14 @@ export interface RhymxPlatformAPI {
   setGroqKey: (key: string) => Promise<void>
   getYouTubeKey: () => Promise<string | null>
   setYouTubeKey: (key: string) => Promise<void>
+  setRememberApiKeys: (remember: boolean) => Promise<AppSettings>
+  testApiKey: (provider: ApiKeyProvider, key: string) => Promise<ApiKeyTestResult>
+  getMotionRendererHealth: () => Promise<MotionRendererHealth>
+  renderMotionGraphic: (request: MotionRenderRequest) => Promise<MotionRenderAsset>
+  cancelMotionRender: () => Promise<boolean>
+  onMotionRenderProgress: (
+    callback: (progress: MotionRenderProgress) => void
+  ) => void
 }
 
 declare global {

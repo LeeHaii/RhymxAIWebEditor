@@ -23,11 +23,15 @@ const mediaSignature = (scene: SceneSegment) =>
   scene.media
     ? `${scene.media.type}\u0000${scene.media.sourceUrl}\u0000${
         scene.media.previewSourceUrl || ''
-      }\u0000${scene.media.sourceStartSec ?? 0}`
+      }\u0000${scene.media.sourceStartSec ?? 0}\u0000${
+        scene.media.motion?.renderedAssetPath || ''
+      }`
     : ''
 
 const isVideoScene = (scene: SceneSegment) =>
-  scene.media?.type === 'remote_video' || scene.media?.type === 'local_video'
+  scene.media?.type === 'remote_video' ||
+  scene.media?.type === 'local_video' ||
+  Boolean(scene.media?.motion?.renderedAssetPath)
 
 const nextPaint = () =>
   new Promise<void>((resolve) =>

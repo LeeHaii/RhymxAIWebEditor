@@ -129,6 +129,10 @@ export function resolveMediaUrl(source: string) {
   return objectUrls.get(source) || source
 }
 
+export function hasResolvedMediaSource(source: string) {
+  return !source.startsWith(ASSET_PREFIX) || objectUrls.has(source)
+}
+
 export async function clearStoredAssets() {
   for (const url of objectUrls.values()) URL.revokeObjectURL(url)
   objectUrls.clear()

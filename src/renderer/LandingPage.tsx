@@ -33,7 +33,7 @@ const features = [
 
 const faqs = [
   ['Is Rhymx free?', 'Guest editing is free during this preview. Media providers can enforce their own quotas, and future hosted features may have separate limits.'],
-  ['Do I need API keys?', 'Not for keyless sources. Hosted Rhymx deployments manage configured Groq, Pexels, and Pixabay credentials; availability can vary by deployment.'],
+  ['Do I need API keys?', 'Groq, Pexels, and YouTube features use keys you add in Settings. Keys stay outside project files and are sent directly to the provider you invoke; Wikimedia remains keyless.'],
   ['Is my media uploaded?', 'Imported files and projects stay in browser storage. Narration is sent to Groq only when you request transcription. Selected remote media is acquired into local project storage.'],
   ['Can I edit generated scenes?', 'Yes. Every scene, caption, timing, track, media choice, transform, and motion-template value remains editable.'],
   ['Where does stock footage come from?', 'Rhymx searches Pexels, Pixabay, Archive.org, NASA, and Wikimedia Commons and preserves the original landing page.'],
@@ -93,4 +93,3 @@ export default function LandingPage() {
     </div>
   )
 }
-

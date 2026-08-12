@@ -12,10 +12,13 @@ import {
   Video,
   Youtube,
   Download,
+  LoaderCircle,
+  RefreshCw,
   Upload,
 } from 'lucide-react'
-import { ImageSearchResult, YouTubeSearchResult } from '../../../types/editor'
+import { ImageSearchResult, MediaAsset, YouTubeSearchResult } from '../../../types/editor'
 import { selectPexelsVideoSources } from '../../../core/media/pexelsVideoFiles'
+import { motionTemplates } from '../../../motion/templates'
 import { useEditorStore } from '../../../store/useEditorStore'
 import {
   formatTimecode,
@@ -721,6 +724,84 @@ function SceneProperties({
   updateSubtitle: ReturnType<typeof useEditorStore.getState>['updateSubtitle']
   handleSubtitleKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
 }) {
+  const [isRenderingMotion, setIsRenderingMotion] = useState(false)
+  const [motionStatus, setMotionStatus] = useState('')
+  const motion = scene.media?.motion
+  const motionTemplate = motionTemplates.find((item) => item.id === motion?.templateId)
+
+  const invalidateMotionRender = (): MediaAsset => {
+    const attachedMedia = scene.media
+    if (!attachedMedia?.motion) return attachedMedia as MediaAsset
+    const {
+      renderedAssetPath: _renderedAssetPath,
+      renderCacheKey: _renderCacheKey,
+      renderedAt: _renderedAt,
+      renderedDurationSec: _renderedDurationSec,
+      renderedWidth: _renderedWidth,
+      renderedHeight: _renderedHeight,
+      renderedFps: _renderedFps,
+      ...editableMotion
+    } = attachedMedia.motion
+    return { ...attachedMedia, motion: editableMotion }
+  }
+
+  const updateMotionValue = (fieldId: string, value: string | number | boolean) => {
+    if (!scene.media?.motion) return
+    const media = invalidateMotionRender()
+    if (!media.motion) return
+    updateScene(scene.id, {
+      media: {
+        ...media,
+        motion: {
+          ...media.motion,
+          values: { ...media.motion.values, [fieldId]: value },
+          accentColor: fieldId === 'accent' ? String(value) : media.motion.accentColor,
+        },
+      },
+    })
+    setMotionStatus('Values changed. Render again to refresh the local asset.')
+  }
+
+  const renderMotion = async () => {
+    if (!scene.media?.motion || scene.media.motion.engine !== 'hyperframes') return
+    setIsRenderingMotion(true)
+    setMotionStatus('Rendering locally…')
+    try {
+      const asset = await window.rhymx.renderMotionGraphic({
+        templateId: scene.media.motion.templateId,
+        templateVersion: scene.media.motion.templateVersion,
+        values: scene.media.motion.values,
+        accentColor: scene.media.motion.accentColor,
+        durationSec: scene.durationSec,
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      })
+      const current = useEditorStore.getState().scenes.find((item) => item.id === scene.id)
+      if (!current?.media?.motion || current.media.id !== scene.media.id) return
+      updateScene(scene.id, {
+        media: {
+          ...current.media,
+          motion: {
+            ...current.media.motion,
+            renderedAssetPath: asset.path,
+            renderCacheKey: asset.cacheKey,
+            renderedAt: asset.renderedAt,
+            renderedDurationSec: asset.durationSec,
+            renderedWidth: asset.width,
+            renderedHeight: asset.height,
+            renderedFps: asset.fps,
+          },
+        },
+      })
+      setMotionStatus(asset.cached ? 'Reused the matching cached HyperFrames render.' : 'Local HyperFrames render complete.')
+    } catch (error) {
+      setMotionStatus(`${error instanceof Error ? error.message : String(error)} Fallback preview is active.`)
+    } finally {
+      setIsRenderingMotion(false)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <section>
@@ -748,12 +829,14 @@ function SceneProperties({
                 ? scene.media.sourceDurationSec - (scene.media.sourceStartSec ?? 0)
                 : undefined
             }
-            onChange={(durationSec) =>
+            onChange={(durationSec) => {
               updateScene(scene.id, {
                 durationSec,
                 endTimeSec: scene.startTimeSec + durationSec,
+                ...(motion?.engine === 'hyperframes' ? { media: invalidateMotionRender() } : {}),
               })
-            }
+              if (motion?.engine === 'hyperframes') setMotionStatus('Duration changed. Render again to refresh the local asset.')
+            }}
           />
         </div>
         <label className="block mt-3 text-[9px] text-slate-500">
@@ -809,6 +892,52 @@ function SceneProperties({
               Remove
             </button>
           </div>
+        </section>
+      )}
+      {motion && motionTemplate && (
+        <section className="rounded-xl border border-fuchsia-400/15 bg-fuchsia-500/[.035] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[9px] uppercase tracking-[.16em] text-fuchsia-300">
+                {motion.engine === 'hyperframes' ? 'Local HyperFrames' : 'Integrated motion'}
+              </div>
+              <div className="mt-1 text-[11px] font-medium text-slate-200">{motionTemplate.name}</div>
+              <div className="mt-1 text-[9px] text-slate-600">
+                {motion.renderedAssetPath
+                  ? `Rendered ${motion.renderedWidth}×${motion.renderedHeight} at ${motion.renderedFps}fps`
+                  : motion.engine === 'hyperframes'
+                    ? 'Fallback preview active until a local render completes.'
+                    : 'Rendered directly by Remotion.'}
+              </div>
+            </div>
+            {motion.engine === 'hyperframes' && (
+              <button
+                onClick={renderMotion}
+                disabled={isRenderingMotion}
+                className="h-8 px-2.5 rounded-lg border border-fuchsia-400/20 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 disabled:opacity-50 text-[9px] text-fuchsia-200 flex items-center gap-1.5"
+              >
+                {isRenderingMotion ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Render
+              </button>
+            )}
+          </div>
+          <div className="mt-3 space-y-2.5">
+            {motionTemplate.fields.map((field) => (
+              <label key={field.id} className="block text-[9px] text-slate-500">
+                {field.label}
+                <input
+                  type={field.type === 'color' ? 'color' : field.type === 'number' ? 'number' : 'text'}
+                  value={String(motion.values[field.id] ?? field.defaultValue)}
+                  onChange={(event) => updateMotionValue(
+                    field.id,
+                    field.type === 'number' ? Number(event.target.value) : event.target.value
+                  )}
+                  className={`${field.type === 'color' ? 'h-9 p-1' : 'h-8 px-2.5'} mt-1 w-full rounded-lg border border-white/10 bg-[#090b10] text-[10px] text-white outline-none focus:border-fuchsia-400/40`}
+                />
+              </label>
+            ))}
+          </div>
+          {motionStatus && <div className="mt-2.5 text-[9px] leading-4 text-slate-500">{motionStatus}</div>}
         </section>
       )}
       <section className="space-y-3">

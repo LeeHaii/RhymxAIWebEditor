@@ -8,6 +8,7 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
   const activeSceneId = useEditorStore((state) => state.activeSceneId)
   const assignMediaToScene = useEditorStore((state) => state.assignMediaToScene)
   const updateScene = useEditorStore((state) => state.updateScene)
+  const setEditorNotice = useEditorStore((state) => state.setEditorNotice)
   const activeScene = useEditorStore((state) =>
     state.scenes.find((scene) => scene.id === state.activeSceneId)
   )
@@ -33,8 +34,10 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
     const nextValues = valuesByTemplate[manifest.id] || Object.fromEntries(
       manifest.fields.map((field) => [field.id, field.defaultValue])
     )
+    const mediaId = `motion:${manifest.id}:${crypto.randomUUID()}`
+    const durationSec = Math.max(activeScene.durationSec, manifest.defaultDurationSec)
     assignMediaToScene(activeSceneId, {
-      id: `motion:${manifest.id}:${crypto.randomUUID()}`,
+      id: mediaId,
       type: 'motion_graphic',
       kind: 'video',
       sourceUrl: `rhymx-motion:${manifest.id}`,
@@ -57,12 +60,44 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
       },
     })
     updateScene(activeSceneId, {
-      durationSec: Math.max(activeScene.durationSec, manifest.defaultDurationSec),
-      endTimeSec:
-        activeScene.startTimeSec + Math.max(activeScene.durationSec, manifest.defaultDurationSec),
+      durationSec,
+      endTimeSec: activeScene.startTimeSec + durationSec,
       suggestedTreatment: 'motion',
     })
     onClose()
+    if (manifest.engine === 'hyperframes') {
+      setEditorNotice('Preparing the advanced scene with your local HyperFrames renderer…')
+      void window.rhymx.renderMotionGraphic({
+        templateId: manifest.id,
+        templateVersion: manifest.version,
+        values: nextValues,
+        accentColor: String(nextValues.accent || '#8b5cf6'),
+        durationSec,
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      }).then((asset) => {
+        const current = useEditorStore.getState().scenes.find((scene) => scene.id === activeSceneId)
+        if (!current?.media?.motion || current.media.id !== mediaId) return
+        useEditorStore.getState().updateScene(activeSceneId, {
+          media: {
+            ...current.media,
+            motion: {
+              ...current.media.motion,
+              renderedAssetPath: asset.path,
+              renderCacheKey: asset.cacheKey,
+              renderedAt: asset.renderedAt,
+              renderedDurationSec: asset.durationSec,
+              renderedWidth: asset.width,
+              renderedHeight: asset.height,
+              renderedFps: asset.fps,
+            },
+          },
+        })
+      }).catch((error) => {
+        setEditorNotice(`${error instanceof Error ? error.message : String(error)} The Remotion fallback preview remains available.`)
+      })
+    }
   }
 
   return (
@@ -72,7 +107,7 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
           <div>
             <div className="text-[10px] uppercase tracking-[0.22em] text-violet-300">Motion library</div>
             <h2 id="motion-title" className="text-xl font-semibold mt-1">Build a scene that moves</h2>
-            <p className="text-xs text-slate-500 mt-1">Integrated templates render directly in the timeline. Advanced templates keep an editable HyperFrames-ready manifest.</p>
+            <p className="text-xs text-slate-500 mt-1">Integrated templates render directly in the timeline. Advanced templates render through the local HyperFrames companion and keep editable values for rerenders.</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/5 text-slate-400" aria-label="Close motion library"><X className="h-5 w-5" /></button>
         </header>

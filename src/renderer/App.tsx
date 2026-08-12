@@ -205,6 +205,7 @@ function EditorWorkspace() {
 function App() {
   const screen = useEditorStore((state) => state.screen)
   const setApiKeys = useEditorStore((state) => state.setApiKeys)
+  const setEditorNotice = useEditorStore((state) => state.setEditorNotice)
 
   useEffect(() => {
     Promise.all([
@@ -219,6 +220,20 @@ function App() {
       })
     })
   }, [setApiKeys])
+
+  useEffect(() => {
+    window.rhymx.onMotionRenderProgress((progress) => {
+      if (progress.status === 'complete') {
+        setEditorNotice('Local HyperFrames render complete. The timeline is using the generated asset.')
+      } else if (progress.status === 'failed') {
+        setEditorNotice(progress.message || 'Local HyperFrames render failed. The fallback preview is still available.')
+      } else if (progress.status === 'cancelled') {
+        setEditorNotice('Local HyperFrames render cancelled. The fallback preview is still available.')
+      } else {
+        setEditorNotice(`HyperFrames: ${progress.message || progress.status} · ${Math.round(progress.progress)}%`)
+      }
+    })
+  }, [setEditorNotice])
 
   if (screen === 'projects') return <ProjectHome />
   if (screen === 'new-project') return <NewProject />

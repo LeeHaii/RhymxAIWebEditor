@@ -42,6 +42,21 @@ const defaultVideoTracks = (): VideoTrack[] => [
 
 const COLLISION_EPSILON = 1 / 300
 
+function invalidateHyperframesRender(media: MediaAsset | null | undefined) {
+  if (!media?.motion || media.motion.engine !== 'hyperframes') return media ?? null
+  const {
+    renderedAssetPath: _renderedAssetPath,
+    renderCacheKey: _renderCacheKey,
+    renderedAt: _renderedAt,
+    renderedDurationSec: _renderedDurationSec,
+    renderedWidth: _renderedWidth,
+    renderedHeight: _renderedHeight,
+    renderedFps: _renderedFps,
+    ...motion
+  } = media.motion
+  return { ...media, motion }
+}
+
 type ClipInterval = {
   id: string
   start: number
@@ -600,6 +615,12 @@ export const useEditorStore = create<EditorStore>((set) => ({
           durationSec: updated.durationSec ?? durationSec,
           endTimeSec: startTimeSec + (updated.durationSec ?? durationSec),
         }
+        if (
+          current.media?.motion?.engine === 'hyperframes' &&
+          Math.abs(updated.durationSec - current.durationSec) > COLLISION_EPSILON
+        ) {
+          updated.media = invalidateHyperframesRender(updated.media)
+        }
       }
       return historyChange(state, {
         scenes: state.scenes.map((scene) => (scene.id === id ? updated : scene)),
@@ -624,6 +645,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         endTimeSec: atTimeSec,
         durationSec: atTimeSec - scene.startTimeSec,
         transcriptText: words.slice(0, wordSplit).join(' ') || scene.transcriptText,
+        media: invalidateHyperframesRender(scene.media),
       }
       const second: SceneSegment = {
         ...scene,
@@ -642,7 +664,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
                   (scene.media.sourceStartSec ?? 0) +
                   (atTimeSec - scene.startTimeSec),
               }
-            : scene.media,
+            : invalidateHyperframesRender(scene.media),
       }
       const scenes = [...state.scenes]
       scenes.splice(index, 1, first, second)
@@ -690,7 +712,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
           endTimeSec: boundedEnd,
           durationSec: boundedEnd - boundedStart,
           media:
-            scene.media && sourceStartSec !== undefined
+            scene.media?.motion?.engine === 'hyperframes'
+              ? invalidateHyperframesRender(scene.media)
+              : scene.media && sourceStartSec !== undefined
               ? {
                   ...scene.media,
                   sourceStartSec: Math.max(

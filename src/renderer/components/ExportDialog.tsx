@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Cpu, FolderOpen, MonitorUp, X } from 'lucide-react'
-import { EncoderCapabilities, ExportEncoder } from '../../types/editor'
+import { Cpu, FolderOpen, MonitorUp, Server, X } from 'lucide-react'
+import { EncoderCapabilities, ExportEncoder, MotionRendererHealth } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
 
 const resolutionOptions = [
@@ -47,7 +47,10 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
   const [capabilities, setCapabilities] = useState<EncoderCapabilities | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [status, setStatus] = useState('')
+  const [motionHealth, setMotionHealth] = useState<MotionRendererHealth | null>(null)
+  const [motionMode, setMotionMode] = useState<'local' | 'fallback'>('local')
   const resolution = resolutionOptions[resolutionIndex]
+  const hasAdvancedMotion = scenes.some((scene) => scene.media?.motion?.engine === 'hyperframes')
 
   useEffect(() => {
     window.rhymx.getEncoderCapabilities().then((detected) => {
@@ -55,7 +58,13 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
       if (detected.nvenc) setEncoder('nvenc')
     })
     window.rhymx.onExportProgress((progress) => setExportProgress(progress))
-  }, [setExportProgress])
+    if (hasAdvancedMotion) {
+      window.rhymx.getMotionRendererHealth().then((health) => {
+        setMotionHealth(health)
+        if (!health.available) setMotionMode('fallback')
+      })
+    }
+  }, [hasAdvancedMotion, setExportProgress])
 
   const encoderSummary = useMemo(() => {
     if (!capabilities) return 'Checking your graphics hardware…'
@@ -92,6 +101,7 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
         height: resolution.height,
         videoBitrate,
         encoder,
+        motionMode,
       })
       setStatus(`Export complete: ${renderedPath}`)
       setExportProgress(100)
@@ -109,6 +119,7 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
       return
     }
     setStatus('Cancelling…')
+    await window.rhymx.cancelMotionRender()
     await window.rhymx.cancelExport()
   }
 
@@ -209,6 +220,48 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
               </select>
             </label>
           </div>
+
+          {hasAdvancedMotion && (
+            <div className={`rounded-lg border p-3 ${motionHealth?.available ? 'border-fuchsia-400/15 bg-fuchsia-500/[.04]' : 'border-amber-500/15 bg-amber-500/[.04]'}`}>
+              <div className="flex items-start gap-3">
+                <Server className={`h-4 w-4 shrink-0 mt-0.5 ${motionHealth?.available ? 'text-fuchsia-300' : 'text-amber-300'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] text-slate-300">Advanced motion rendering</div>
+                  <div className="mt-1 text-[9px] leading-4 text-slate-600">
+                    {motionHealth === null
+                      ? 'Checking the local HyperFrames companion…'
+                      : motionHealth.available
+                        ? 'Missing or stale motion assets will be rendered locally at the selected export resolution.'
+                        : `${motionHealth.message || 'The local renderer is offline.'} The Remotion fallback remains available.`}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <label className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                      <input
+                        type="radio"
+                        name="motion-mode"
+                        checked={motionMode === 'local'}
+                        disabled={!motionHealth?.available || isExporting}
+                        onChange={() => setMotionMode('local')}
+                        className="accent-fuchsia-500"
+                      />
+                      Local HyperFrames
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                      <input
+                        type="radio"
+                        name="motion-mode"
+                        checked={motionMode === 'fallback'}
+                        disabled={isExporting}
+                        onChange={() => setMotionMode('fallback')}
+                        className="accent-violet-500"
+                      />
+                      Remotion fallback
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-lg border border-white/5 bg-black/15 p-3 flex gap-3">
             <Cpu className="h-4 w-4 text-slate-500 shrink-0 mt-0.5" />

@@ -9,7 +9,7 @@ import {
   useVideoConfig,
 } from 'remotion'
 import { Audio, Video as ExportVideo } from '@remotion/media'
-import { resolveMediaUrl } from '../platform/web/browserAssets'
+import { hasResolvedMediaSource, resolveMediaUrl } from '../platform/web/browserAssets'
 import {
   SceneSegment,
   SubtitleSegment,
@@ -174,6 +174,13 @@ const SceneContent: React.FC<{
 
   const isVideo =
     media?.type === 'remote_video' || media?.type === 'local_video'
+  const renderedMotionSource =
+    media?.type === 'motion_graphic' &&
+    media.motion?.engine === 'hyperframes' &&
+    media.motion.renderedAssetPath &&
+    hasResolvedMediaSource(media.motion.renderedAssetPath)
+      ? media.motion.renderedAssetPath
+      : undefined
   const videoSource =
     mediaMode === 'preview' && media?.previewSourceUrl
       ? media.previewSourceUrl
@@ -224,6 +231,22 @@ const SceneContent: React.FC<{
             Add media to this scene
           </div>
         </AbsoluteFill>
+      ) : renderedMotionSource ? (
+        mediaMode === 'preview' ? (
+          <Html5Video
+            src={mediaSource(renderedMotionSource)}
+            volume={0}
+            preload="auto"
+            pauseWhenBuffering
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <ExportVideo
+            src={mediaSource(renderedMotionSource)}
+            volume={0}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        )
       ) : media.type === 'motion_graphic' && media.motion ? (
         <MotionGraphicContent scene={scene} />
       ) : isVideo ? (
@@ -431,7 +454,7 @@ const MotionGraphicContent: React.FC<{ scene: SceneSegment }> = ({ scene }) => {
           opacity: eased,
         }}
       >
-        {motion.engine === 'hyperframes' ? 'Advanced motion' : 'Integrated motion'}
+        {motion.engine === 'hyperframes' ? 'Fallback preview · HyperFrames offline' : 'Integrated motion'}
       </div>
       <div
         style={{

@@ -2,18 +2,28 @@
   "name": "ai-video-editor",
   "version": "1.0.0",
   "description": "Browser-native AI video editor",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
+    "dev:motion": "node scripts/local-motion-server.mjs",
+    "dev:local": "node scripts/dev-local.mjs",
+    "doctor:motion": "node scripts/motion-doctor.mjs",
+    "test:motion": "node --test scripts/local-motion-template.test.mjs",
     "build": "tsc && vite build && node scripts/write-site-worker.mjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hyperframes/producer": "0.7.107",
     "@remotion/media": "^4.0.508",
     "@remotion/player": "^4.0.508",
     "@remotion/web-renderer": "^4.0.508",
     "axios": "^1.6.8",
     "clsx": "^2.1.1",
+    "gsap": "3.15.0",
     "lucide-react": "^0.379.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -24,11 +34,11 @@
   "devDependencies": {
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "6.0.5",
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "typescript": "^5.4.5",
-    "vite": "^5.4.21"
+    "vite": "8.2.1"
   }
 }
