@@ -103,6 +103,7 @@ export interface SceneSegment {
 }
 
 export interface ProjectDocument {
+  schemaVersion: number
   id: string
   name: string
   createdAt: string
@@ -236,7 +237,7 @@ export interface BatchExportResult {
   cancelled: boolean
 }
 
-export interface ElectronAPI {
+export interface RhymxPlatformAPI {
   openAudioFile: () => Promise<{ path: string; duration: number } | null>
   openMediaFiles: () => Promise<ImportedFile[]>
   getMediaDuration: (filePath: string) => Promise<number | null>
@@ -293,6 +294,7 @@ export interface ElectronAPI {
 
 declare global {
   interface Window {
-    electronAPI: ElectronAPI
+    rhymx: RhymxPlatformAPI
+    showSaveFilePicker?: (options?: unknown) => Promise<FileSystemFileHandle>
   }
 }

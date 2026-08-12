@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import { FolderOpen, KeyRound, RotateCcw, Settings, Trash2, X } from 'lucide-react'
+import { Database, KeyRound, Settings, Trash2, X } from 'lucide-react'
 import { AppSettings } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
 
 export default function ProjectSettingsDialog({
   onClose,
-  onStorageChanged,
 }: {
   onClose: () => void
-  onStorageChanged: () => void
+  onStorageChanged?: () => void
 }) {
   const { apiKeys, setApiKeys } = useEditorStore()
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -16,46 +15,20 @@ export default function ProjectSettingsDialog({
   const [status, setStatus] = useState('')
 
   useEffect(() => {
-    window.electronAPI.getAppSettings().then(setSettings)
+    window.rhymx.getAppSettings().then(setSettings)
   }, [])
 
   const updateKey = (key: 'groq' | 'pexels' | 'youtube', value: string) => {
     setApiKeys({ [key]: value })
-    if (key === 'groq') window.electronAPI.setGroqKey(value)
-    else if (key === 'pexels') window.electronAPI.setPexelsKey(value)
-    else window.electronAPI.setYouTubeKey(value)
-  }
-
-  const chooseFolder = async () => {
-    setBusy('folder')
-    setStatus('')
-    try {
-      const next = await window.electronAPI.chooseProjectsDirectory()
-      if (next) {
-        setSettings(next)
-        onStorageChanged()
-        setStatus('Project storage folder updated.')
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const resetFolder = async () => {
-    setBusy('folder')
-    const next = await window.electronAPI.resetProjectsDirectory()
-    setSettings(next)
-    onStorageChanged()
-    setStatus('Using the default project storage folder.')
-    setBusy(null)
+    if (key === 'groq') window.rhymx.setGroqKey(value)
+    else if (key === 'pexels') window.rhymx.setPexelsKey(value)
+    else window.rhymx.setYouTubeKey(value)
   }
 
   const clearCache = async () => {
     if (
       !window.confirm(
-        'Clear temporary downloads and browser cache? Projects and saved YouTube clips are kept.'
+        'Clear temporary render data? Projects and imported media references are kept.'
       )
     ) {
       return
@@ -63,9 +36,9 @@ export default function ProjectSettingsDialog({
     setBusy('cache')
     setStatus('Clearing cache…')
     try {
-      const next = await window.electronAPI.clearCache()
+      const next = await window.rhymx.clearCache()
       setSettings(next)
-      setStatus('Cache cleared. Project JSON files and imported source files were not removed.')
+      setStatus('Temporary render data cleared. Projects and imported media were not removed.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error))
     } finally {
@@ -88,34 +61,17 @@ export default function ProjectSettingsDialog({
 
         <div className="p-5 space-y-6">
           <section>
-            <h3 className="text-xs font-medium text-slate-200">Project storage</h3>
+            <h3 className="text-xs font-medium text-slate-200">Browser storage</h3>
             <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-              New saves and the project browser use this folder. Existing projects are not moved
-              automatically.
+              Project data is stored in IndexedDB. Imported files stay on your device and are
+              referenced through browser file handles where supported.
             </p>
             <div className="mt-3 rounded-lg border border-white/8 bg-black/20 p-3 text-[10px] text-slate-400 break-all">
               {settings?.projectsDirectory || 'Loading…'}
             </div>
-            <div className="mt-2 flex gap-2">
-              <button
-                onClick={chooseFolder}
-                disabled={busy !== null}
-                className="h-9 px-3 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 flex items-center gap-2 text-[10px]"
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-                Browse folder
-              </button>
-              <button
-                onClick={resetFolder}
-                disabled={
-                  busy !== null ||
-                  settings?.projectsDirectory === settings?.defaultProjectsDirectory
-                }
-                className="h-9 px-3 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-35 flex items-center gap-2 text-[10px]"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Use default
-              </button>
+            <div className="mt-2 flex items-center gap-2 text-[9px] text-emerald-400/80">
+              <Database className="h-3.5 w-3.5" />
+              Stored locally in this browser profile
             </div>
           </section>
 
@@ -135,7 +91,7 @@ export default function ProjectSettingsDialog({
                 checked={settings?.autoStockEnabled ?? true}
                 onChange={async (event) =>
                   setSettings(
-                    await window.electronAPI.setAutoStockEnabled(event.target.checked)
+                    await window.rhymx.setAutoStockEnabled(event.target.checked)
                   )
                 }
                 className="h-4 w-4 accent-violet-500"
@@ -173,9 +129,8 @@ export default function ProjectSettingsDialog({
           <section className="border-t border-white/8 pt-5">
             <h3 className="text-xs font-medium text-slate-200">Cache</h3>
             <p className="mt-1 text-[10px] text-slate-500">
-              Temporary downloads and browser cache · {formatBytes(settings?.cacheSizeBytes || 0)}.
-              Saved YouTube clips are stored with their projects and are not cleared.
-              Cached YouTube clips may be referenced by projects.
+              Browser-managed source fallback data · {formatBytes(settings?.cacheSizeBytes || 0)}.
+              Projects and imported media references are always kept.
             </p>
             <button
               onClick={clearCache}

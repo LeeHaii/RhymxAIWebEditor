@@ -106,7 +106,7 @@ export default function ContextInspector() {
   }, [activeScene?.id])
 
   useEffect(() => {
-    window.electronAPI.onYouTubeTrimProgress((progress) => {
+    window.rhymx.onYouTubeTrimProgress((progress) => {
       setTrimProgress(Math.max(0, Math.min(100, progress)))
     })
   }, [])
@@ -172,9 +172,9 @@ export default function ContextInspector() {
 
     try {
       if (activeTab === 'duckduckgo') {
-        setResults(await window.electronAPI.searchDuckDuckGoImages(query))
+        setResults(await window.rhymx.searchDuckDuckGoImages(query))
       } else if (activeTab === 'pexels-image') {
-        setResults(await window.electronAPI.searchImages(query, apiKeys.pexels))
+        setResults(await window.rhymx.searchImages(query, apiKeys.pexels))
       } else if (activeTab === 'pexels-video') {
         if (!apiKeys.pexels.trim()) {
           throw new Error('Add a Pexels API key in Settings before searching Pexels Video.')
@@ -187,7 +187,7 @@ export default function ContextInspector() {
         const data = await response.json()
         setResults(data.videos || [])
       } else {
-        setResults(await window.electronAPI.searchYouTube(query, apiKeys.youtube))
+        setResults(await window.rhymx.searchYouTube(query, apiKeys.youtube))
       }
     } catch (error) {
       setResults([])
@@ -244,7 +244,7 @@ export default function ContextInspector() {
     setTrimProgress(0)
     setSearchError(null)
     try {
-      const localPath = await window.electronAPI.trimYouTube(
+      const localPath = await window.rhymx.trimYouTube(
         selectedYoutube.url,
         start,
         end,

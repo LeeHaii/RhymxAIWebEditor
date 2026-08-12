@@ -32,7 +32,7 @@ function EditorWorkspace() {
     const timer = window.setTimeout(() => {
       const project = getProjectDocument()
       if (project) {
-        window.electronAPI.saveProject(project).catch((error) => {
+        window.rhymx.saveProject(project).catch((error) => {
           console.error('Autosave failed:', error)
         })
       }
@@ -66,7 +66,7 @@ function EditorWorkspace() {
       if (commandKey && key === 's') {
         event.preventDefault()
         const project = getProjectDocument()
-        if (project) window.electronAPI.saveProject(project)
+        if (project) window.rhymx.saveProject(project)
         return
       }
       if (commandKey && (key === '+' || key === '=' || key === '-' || key === '0')) {
@@ -207,9 +207,9 @@ function App() {
 
   useEffect(() => {
     Promise.all([
-      window.electronAPI.getGroqKey(),
-      window.electronAPI.getPexelsKey(),
-      window.electronAPI.getYouTubeKey(),
+      window.rhymx.getGroqKey(),
+      window.rhymx.getPexelsKey(),
+      window.rhymx.getYouTubeKey(),
     ]).then(([groq, pexels, youtube]) => {
       setApiKeys({
         groq: groq || '',

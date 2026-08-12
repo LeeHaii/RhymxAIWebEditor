@@ -5,8 +5,7 @@ import {
   getProjectDocument,
   useEditorStore,
 } from '../../store/useEditorStore'
-
-type FileWithPath = File & { path?: string }
+import { storeAsset } from '../../platform/web/browserAssets'
 
 export default function NewProject() {
   const {
@@ -29,10 +28,10 @@ export default function NewProject() {
   const [autoStockEnabled, setAutoStockEnabled] = useState(true)
 
   useEffect(() => {
-    window.electronAPI
+    window.rhymx
       .getAppSettings()
       .then((settings) => setAutoStockEnabled(settings.autoStockEnabled))
-    window.electronAPI.onTranscriptionProgress((progress) => {
+    window.rhymx.onTranscriptionProgress((progress) => {
       setProcessingProgress({
         completed: progress.completed,
         total: progress.total,
@@ -40,7 +39,7 @@ export default function NewProject() {
         message: progress.message,
       })
     })
-    window.electronAPI.onPexelsAutoMatchProgress((progress) => {
+    window.rhymx.onPexelsAutoMatchProgress((progress) => {
       setProcessingProgress({
         completed: progress.completed,
         total: progress.total,
@@ -56,23 +55,24 @@ export default function NewProject() {
   )
 
   const browse = async () => {
-    const file = await window.electronAPI.openAudioFile()
+    const file = await window.rhymx.openAudioFile()
     if (file) setSelectedAudio(file)
   }
 
   const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
-    const file = event.dataTransfer.files[0] as FileWithPath | undefined
-    if (!file?.path) return
+    const file = event.dataTransfer.files[0]
+    if (!file) return
     const extension = file.name.split('.').pop()?.toLowerCase()
     if (!extension || !['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'webm'].includes(extension)) {
       alert('Please drop a supported audio file.')
       return
     }
+    const imported = await storeAsset(file, 'music')
     setSelectedAudio({
-      path: file.path,
-      duration: (await window.electronAPI.getMediaDuration(file.path)) || 0,
+      path: imported.path,
+      duration: (await window.rhymx.getMediaDuration(imported.path)) || 0,
     })
   }
 
@@ -90,9 +90,9 @@ export default function NewProject() {
       return
     }
 
-    await window.electronAPI.setGroqKey(apiKeys.groq.trim())
+    await window.rhymx.setGroqKey(apiKeys.groq.trim())
     if (autoStockEnabled) {
-      await window.electronAPI.setPexelsKey(apiKeys.pexels.trim())
+      await window.rhymx.setPexelsKey(apiKeys.pexels.trim())
     }
     beginProject(name, selectedAudio)
     setProcessingProgress({
@@ -103,7 +103,7 @@ export default function NewProject() {
     })
 
     try {
-      const result = await window.electronAPI.transcribeAudio(selectedAudio.path, apiKeys.groq)
+      const result = await window.rhymx.transcribeAudio(selectedAudio.path, apiKeys.groq)
       const subtitleTimingScenes = result.map((scene, index) => ({
         ...scene,
         id: scene.id || `scene_${index + 1}`,
@@ -131,7 +131,7 @@ export default function NewProject() {
           message: 'Searching Pexels for each scene',
         })
         try {
-          const stockResult = await window.electronAPI.autoMatchPexelsVideos(
+          const stockResult = await window.rhymx.autoMatchPexelsVideos(
             scenes,
             apiKeys.pexels
           )
@@ -154,7 +154,7 @@ export default function NewProject() {
       setIsProcessingAudio(false)
       setScreen('editor')
       const project = getProjectDocument()
-      if (project) await window.electronAPI.saveProject(project)
+      if (project) await window.rhymx.saveProject(project)
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason)
       setIsProcessingAudio(false)

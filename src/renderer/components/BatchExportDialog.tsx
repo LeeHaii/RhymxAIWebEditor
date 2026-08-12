@@ -32,11 +32,11 @@ export default function BatchExportDialog({
   const resolution = resolutions[resolutionIndex]
 
   useEffect(() => {
-    window.electronAPI.getEncoderCapabilities().then((detected) => {
+    window.rhymx.getEncoderCapabilities().then((detected) => {
       setCapabilities(detected)
       if (detected.nvenc) setEncoder('nvenc')
     })
-    window.electronAPI.onBatchExportProgress(setProgress)
+    window.rhymx.onBatchExportProgress(setProgress)
   }, [])
 
   const selectedProjects = useMemo(
@@ -54,7 +54,7 @@ export default function BatchExportDialog({
   }
 
   const chooseDirectory = async () => {
-    const directory = await window.electronAPI.chooseBatchExportDirectory()
+    const directory = await window.rhymx.chooseBatchExportDirectory()
     if (directory) setOutputDirectory(directory)
   }
 
@@ -65,7 +65,7 @@ export default function BatchExportDialog({
     setProgress(null)
     try {
       setResult(
-        await window.electronAPI.batchExportProjects({
+        await window.rhymx.batchExportProjects({
           projectIds: selectedProjects.map((project) => project.id),
           outputDirectory,
           width: resolution.width,
@@ -92,7 +92,7 @@ export default function BatchExportDialog({
 
   const cancel = async () => {
     if (isExporting) {
-      await window.electronAPI.cancelBatchExport()
+      await window.rhymx.cancelBatchExport()
       return
     }
     onClose()

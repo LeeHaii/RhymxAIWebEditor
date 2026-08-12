@@ -13,8 +13,8 @@ import {
 import { ImportedFile, LibraryAsset, MediaKind } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
 import { localMediaUrl } from '../services/localMedia'
+import { storeAsset } from '../../platform/web/browserAssets'
 
-type FileWithPath = File & { path?: string }
 type MediaFilter = 'all' | 'video' | 'image' | 'audio' | 'youtube'
 
 const videoExtensions = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi'])
@@ -56,7 +56,7 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
           file.durationSec ??
           (file.kind === 'image'
             ? undefined
-            : (await window.electronAPI.getMediaDuration(file.path)) || undefined),
+            : (await window.rhymx.getMediaDuration(file.path)) || undefined),
       }))
     )
     addMediaAssets(
@@ -67,19 +67,16 @@ export default function MediaBin({ width = 256 }: { width?: number }) {
     )
   }
 
-  const importFiles = async () => addFiles(await window.electronAPI.openMediaFiles())
+  const importFiles = async () => addFiles(await window.rhymx.openMediaFiles())
 
   const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
-    const files = Array.from(event.dataTransfer.files)
-      .map((file) => {
-        const fileWithPath = file as FileWithPath
-        return fileWithPath.path
-          ? { path: fileWithPath.path, name: file.name, kind: classify(file.name) }
-          : null
-      })
-      .filter((file): file is NonNullable<typeof file> => Boolean(file))
+    const files = await Promise.all(
+      Array.from(event.dataTransfer.files).map((file) =>
+        storeAsset(file, classify(file.name))
+      )
+    )
     await addFiles(files)
   }
 

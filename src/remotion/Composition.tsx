@@ -1,14 +1,14 @@
 import React, { useMemo } from 'react'
 import {
   AbsoluteFill,
-  Audio,
   Img,
   interpolate,
   Sequence,
   useCurrentFrame,
   useVideoConfig,
-  Video,
 } from 'remotion'
+import { Audio, Video } from '@remotion/media'
+import { resolveMediaUrl } from '../platform/web/browserAssets'
 import {
   SceneSegment,
   SubtitleSegment,
@@ -36,14 +36,7 @@ const defaultSubtitleSettings: SubtitleSettings = {
 const defaultTrackSettings: TrackSettings = { muted: false, visible: true }
 
 function mediaSource(source: string) {
-  if (!source || /^(https?:|data:|blob:|rhymx-media:)/.test(source)) return source
-  let filePath = source
-  if (source.startsWith('file:')) {
-    const parsed = new URL(source)
-    filePath = decodeURIComponent(parsed.pathname)
-    if (/^\/[a-zA-Z]:\//.test(filePath)) filePath = filePath.slice(1)
-  }
-  return `rhymx-media://local/${encodeURIComponent(filePath)}`
+  return resolveMediaUrl(source)
 }
 
 export const MainComposition: React.FC<{
@@ -83,7 +76,7 @@ export const MainComposition: React.FC<{
   return (
     <AbsoluteFill style={{ backgroundColor: '#07080b' }}>
       {audioPath && voiceTrackSettings.visible && !voiceTrackSettings.muted && (
-        <Audio src={mediaSource(audioPath)} pauseWhenBuffering />
+        <Audio src={mediaSource(audioPath)} />
       )}
 
       {audioTrackSettings.visible &&
@@ -100,7 +93,6 @@ export const MainComposition: React.FC<{
               src={mediaSource(clip.path)}
               volume={clip.volume}
               trimBefore={Math.round((clip.sourceStartSec ?? 0) * fps)}
-              pauseWhenBuffering
             />
           </Sequence>
         ))}
@@ -224,7 +216,6 @@ const SceneContent: React.FC<{ scene: SceneSegment; trackMuted: boolean }> = Rea
           src={mediaSource(media.sourceUrl)}
           volume={trackMuted ? 0 : (scene.volume ?? 1)}
           trimBefore={Math.round((media.sourceStartSec ?? 0) * fps)}
-          pauseWhenBuffering
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (

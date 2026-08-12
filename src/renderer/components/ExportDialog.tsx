@@ -50,11 +50,11 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
   const resolution = resolutionOptions[resolutionIndex]
 
   useEffect(() => {
-    window.electronAPI.getEncoderCapabilities().then((detected) => {
+    window.rhymx.getEncoderCapabilities().then((detected) => {
       setCapabilities(detected)
       if (detected.nvenc) setEncoder('nvenc')
     })
-    window.electronAPI.onExportProgress((progress) => setExportProgress(progress))
+    window.rhymx.onExportProgress((progress) => setExportProgress(progress))
   }, [setExportProgress])
 
   const encoderSummary = useMemo(() => {
@@ -64,7 +64,7 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
   }, [capabilities])
 
   const choosePath = async () => {
-    const selected = await window.electronAPI.chooseExportPath(`${safeName(name)}.mp4`)
+    const selected = await window.rhymx.chooseExportPath(`${safeName(name)}.mp4`)
     if (selected) setOutputPath(selected)
   }
 
@@ -78,7 +78,7 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
         : 'Preparing CPU render…'
     )
     try {
-      const renderedPath = await window.electronAPI.exportVideo({
+      const renderedPath = await window.rhymx.exportVideo({
         scenes,
         audioPath: audioFile.path,
         audioClips,
@@ -109,7 +109,7 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
       return
     }
     setStatus('Cancelling…')
-    await window.electronAPI.cancelExport()
+    await window.rhymx.cancelExport()
   }
 
   return (

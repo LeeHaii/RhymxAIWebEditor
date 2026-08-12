@@ -11,6 +11,7 @@ import {
   TrackSettings,
   VideoTrack,
 } from '../types/editor'
+import { CURRENT_PROJECT_SCHEMA_VERSION } from '../core/project/migrations'
 
 const defaultSubtitleSettings: SubtitleSettings = {
   enabled: true,
@@ -1174,6 +1175,7 @@ export function getProjectDocument(): ProjectDocument | null {
   if (!state.projectId || !state.projectCreatedAt) return null
 
   return {
+    schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION,
     id: state.projectId,
     name: state.projectName,
     createdAt: state.projectCreatedAt,

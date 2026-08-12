@@ -44,7 +44,7 @@ export default function Header() {
 
   const goHome = async () => {
     const project = getProjectDocument()
-    if (project) await window.electronAPI.saveProject(project)
+    if (project) await window.rhymx.saveProject(project)
     closeProject()
   }
 
@@ -53,9 +53,9 @@ export default function Header() {
     value: string
   ) => {
     setApiKeys({ [key]: value })
-    if (key === 'groq') window.electronAPI.setGroqKey(value)
-    else if (key === 'pexels') window.electronAPI.setPexelsKey(value)
-    else window.electronAPI.setYouTubeKey(value)
+    if (key === 'groq') window.rhymx.setGroqKey(value)
+    else if (key === 'pexels') window.rhymx.setPexelsKey(value)
+    else window.rhymx.setYouTubeKey(value)
   }
 
   return (

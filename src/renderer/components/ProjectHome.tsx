@@ -32,7 +32,7 @@ export default function ProjectHome() {
     setIsLoading(true)
     setError(null)
     try {
-      setProjects(await window.electronAPI.listProjects())
+      setProjects(await window.rhymx.listProjects())
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -65,7 +65,7 @@ export default function ProjectHome() {
     setOpeningId(projectId)
     setError(null)
     try {
-      loadProject(await window.electronAPI.loadProject(projectId))
+      loadProject(await window.rhymx.loadProject(projectId))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -97,13 +97,13 @@ export default function ProjectHome() {
       return
     }
     void runProjectAction(project.id, () =>
-      window.electronAPI.renameProject(project.id, name)
+      window.rhymx.renameProject(project.id, name)
     )
   }
 
   const duplicateProject = (project: ProjectSummary) => {
     void runProjectAction(project.id, () =>
-      window.electronAPI.duplicateProject(project.id)
+      window.rhymx.duplicateProject(project.id)
     )
   }
 
@@ -116,7 +116,7 @@ export default function ProjectHome() {
       return
     }
     void runProjectAction(project.id, () =>
-      window.electronAPI.deleteProject(project.id)
+      window.rhymx.deleteProject(project.id)
     )
   }
 
