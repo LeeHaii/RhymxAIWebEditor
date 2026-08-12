@@ -4,7 +4,7 @@
   "description": "Browser-native AI video editor",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/write-site-worker.mjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
