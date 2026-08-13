@@ -149,8 +149,8 @@ export default function ProjectSettingsDialog({
                   <h3 className="text-xs font-medium text-slate-200">API keys</h3>
                 </div>
                 <p className="mt-1 text-[9px] leading-4 text-slate-600">
-                  Used only for direct requests from this browser to each provider. Keys are
-                  never written into projects, exports, URLs, or build output.
+                  Keys stay in this browser profile and are sent only to the provider you use.
+                  They are never written into projects, exports, source code, or build output.
                 </p>
               </div>
               <label className="shrink-0 flex items-center gap-2 text-[9px] text-slate-400">
@@ -170,7 +170,7 @@ export default function ProjectSettingsDialog({
                 [
                   ['groq', 'Groq API key', 'Required for Whisper transcription'],
                   ['pexels', 'Pexels API key', 'Search Pexels directly from this browser'],
-                  ['pixabay', 'Pixabay API key', 'Search Pixabay directly from local development'],
+                  ['pixabay', 'Pixabay API key', 'Search Pixabay when a hosted key is unavailable'],
                   ['youtube', 'YouTube Data API key', 'Required only for YouTube search'],
                 ] as const
               ).map(([key, label, hint]) => (

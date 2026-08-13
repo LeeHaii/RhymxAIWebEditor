@@ -17,6 +17,7 @@ import ExportDialog from './ExportDialog'
 import OpenMediaDialog from './OpenMediaDialog'
 import MotionLibraryDialog from './MotionLibraryDialog'
 import AttributionDialog from './AttributionDialog'
+import ProjectSettingsDialog from './ProjectSettingsDialog'
 
 export default function Header() {
   const {
@@ -78,21 +79,8 @@ export default function Header() {
         <button onClick={() => setShowAttribution(true)} className="hidden xl:flex items-center gap-2 px-3 py-2 border border-white/8 bg-white/5 hover:bg-white/10 rounded-lg text-xs text-slate-300"><Library className="w-3.5 h-3.5" />Sources</button>
         <button onClick={() => setShowExport(true)} disabled={scenes.length === 0} className="flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-600 rounded-lg text-xs font-medium"><Download className="w-3.5 h-3.5" /><span className="hidden sm:inline">Export</span></button>
         <button onClick={() => { setShowShortcuts(!showShortcuts); setShowSettings(false) }} className="hidden md:block p-2 text-slate-500 hover:text-white rounded-lg hover:bg-white/5" title="Keyboard shortcuts"><Keyboard className="w-4 h-4" /></button>
-        <button onClick={() => { setShowSettings(!showSettings); setShowShortcuts(false) }} className="p-2 text-slate-500 hover:text-white rounded-lg hover:bg-white/5" title="Workspace tools"><Settings className="w-4 h-4" /></button>
+        <button onClick={() => { setShowSettings(true); setShowShortcuts(false) }} className="p-2 text-slate-500 hover:text-white rounded-lg hover:bg-white/5" title="API keys and settings" aria-label="Open API keys and settings"><Settings className="w-4 h-4" /></button>
       </div>
-
-      {showSettings && (
-        <div className="absolute top-12 right-3 w-80 bg-[#181a22] border border-white/10 shadow-2xl rounded-xl p-4 z-50">
-          <h2 className="font-semibold text-sm text-slate-200 mb-4">Guest workspace</h2>
-          <div className="space-y-3">
-            <div className="rounded-xl border border-white/8 bg-black/20 p-3 text-[11px] text-slate-400 leading-relaxed">Projects and acquired media stay in this browser. Provider credentials are managed by the Rhymx service and are never saved with your project.</div>
-            <button onClick={() => { setShowMedia(true); setShowSettings(false) }} className="w-full border border-white/8 bg-white/5 hover:bg-white/10 rounded-lg py-2 text-xs">Open free media</button>
-            <button onClick={() => { setShowMotion(true); setShowSettings(false) }} className="w-full border border-white/8 bg-white/5 hover:bg-white/10 rounded-lg py-2 text-xs">Add motion scene</button>
-            <button onClick={() => { setShowAttribution(true); setShowSettings(false) }} className="w-full border border-white/8 bg-white/5 hover:bg-white/10 rounded-lg py-2 text-xs">Review source licenses</button>
-            <button onClick={() => setShowSettings(false)} className="w-full bg-violet-600 hover:bg-violet-500 rounded-lg py-2 text-xs">Done</button>
-          </div>
-        </div>
-      )}
 
       {showShortcuts && (
         <div className="absolute top-12 right-12 w-80 bg-[#181a22] border border-white/10 shadow-2xl rounded-xl p-4 z-50">
@@ -116,6 +104,7 @@ export default function Header() {
       {showMedia && <OpenMediaDialog onClose={() => setShowMedia(false)} />}
       {showMotion && <MotionLibraryDialog onClose={() => setShowMotion(false)} />}
       {showAttribution && <AttributionDialog onClose={() => setShowAttribution(false)} />}
+      {showSettings && <ProjectSettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   )
 }
