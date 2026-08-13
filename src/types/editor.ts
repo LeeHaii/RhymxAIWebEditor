@@ -264,7 +264,7 @@ export interface AppSettings {
   cacheSizeBytes: number
 }
 
-export type ApiKeyProvider = 'groq' | 'pexels' | 'youtube'
+export type ApiKeyProvider = 'groq' | 'pexels' | 'pixabay' | 'youtube'
 
 export interface ApiKeyTestResult {
   ok: boolean
@@ -481,6 +481,8 @@ export interface RhymxPlatformAPI {
   ) => void
   getPexelsKey: () => Promise<string | null>
   setPexelsKey: (key: string) => Promise<void>
+  getPixabayKey: () => Promise<string | null>
+  setPixabayKey: (key: string) => Promise<void>
   getGroqKey: () => Promise<string | null>
   setGroqKey: (key: string) => Promise<void>
   getYouTubeKey: () => Promise<string | null>

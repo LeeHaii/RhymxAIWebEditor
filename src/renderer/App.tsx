@@ -211,11 +211,13 @@ function App() {
     Promise.all([
       window.rhymx.getGroqKey(),
       window.rhymx.getPexelsKey(),
+      window.rhymx.getPixabayKey(),
       window.rhymx.getYouTubeKey(),
-    ]).then(([groq, pexels, youtube]) => {
+    ]).then(([groq, pexels, pixabay, youtube]) => {
       setApiKeys({
         groq: groq || '',
         pexels: pexels || '',
+        pixabay: pixabay || '',
         youtube: youtube || '',
       })
     })

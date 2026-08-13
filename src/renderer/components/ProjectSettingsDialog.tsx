@@ -35,10 +35,11 @@ export default function ProjectSettingsDialog({
     window.rhymx.getMotionRendererHealth().then(setMotionHealth)
   }, [])
 
-  const updateKey = (key: 'groq' | 'pexels' | 'youtube', value: string) => {
+  const updateKey = (key: ApiKeyProvider, value: string) => {
     setApiKeys({ [key]: value })
     if (key === 'groq') window.rhymx.setGroqKey(value)
     else if (key === 'pexels') window.rhymx.setPexelsKey(value)
+    else if (key === 'pixabay') window.rhymx.setPixabayKey(value)
     else window.rhymx.setYouTubeKey(value)
     setKeyStatus((current) => ({ ...current, [key]: '' }))
   }
@@ -168,7 +169,8 @@ export default function ProjectSettingsDialog({
               {(
                 [
                   ['groq', 'Groq API key', 'Required for Whisper transcription'],
-                  ['pexels', 'Pexels API key', 'Required for automatic stock footage'],
+                  ['pexels', 'Pexels API key', 'Search Pexels directly from this browser'],
+                  ['pixabay', 'Pixabay API key', 'Search Pixabay directly from local development'],
                   ['youtube', 'YouTube Data API key', 'Required only for YouTube search'],
                 ] as const
               ).map(([key, label, hint]) => (

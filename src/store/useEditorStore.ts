@@ -12,6 +12,7 @@ import {
   TrackSettings,
   VideoTrack,
 } from '../types/editor'
+import { recommendedSearchKeywords } from '../core/scenes/searchKeywords'
 import { CURRENT_PROJECT_SCHEMA_VERSION } from '../core/project/migrations'
 
 const defaultSubtitleSettings: SubtitleSettings = {
@@ -152,16 +153,11 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
           sourceDurationSec: scene.media.sourceDurationSec ?? scene.media.durationSec,
         }
       : null
-    const isImage =
-      media?.type === 'local_image' || media?.type === 'remote_image'
-    const maximumDuration =
-      media && !isImage && media.sourceDurationSec
-        ? Math.max(1 / 30, media.sourceDurationSec - (media.sourceStartSec ?? 0))
-        : Number.POSITIVE_INFINITY
-    const durationSec = Math.min(scene.durationSec, maximumDuration)
+    const durationSec = Math.max(1 / 30, scene.durationSec)
     return {
       ...scene,
       media,
+      keywords: recommendedSearchKeywords(scene.transcriptText, scene.keywords || []),
       durationSec,
       endTimeSec: scene.startTimeSec + durationSec,
       trackId: scene.trackId || fallbackTrackId,
@@ -180,6 +176,11 @@ export function extendVisualScenesAcrossSpeechGaps(
   const mainScenes = output
     .filter((scene) => (scene.trackId || 'track_main') === mainTrackId)
     .sort((first, second) => first.startTimeSec - second.startTimeSec)
+  const firstScene = mainScenes[0]
+  if (firstScene && firstScene.startTimeSec > COLLISION_EPSILON) {
+    firstScene.durationSec += firstScene.startTimeSec
+    firstScene.startTimeSec = 0
+  }
   for (let index = 0; index < mainScenes.length; index += 1) {
     const scene = mainScenes[index]
     const nextScene = mainScenes[index + 1]
@@ -244,6 +245,7 @@ interface EditorStore {
   apiKeys: {
     groq: string
     pexels: string
+    pixabay: string
     youtube: string
   }
   isProcessingAudio: boolean
@@ -301,6 +303,7 @@ interface EditorStore {
   setApiKeys: (keys: {
     groq?: string
     pexels?: string
+    pixabay?: string
     youtube?: string
   }) => void
   setIsProcessingAudio: (processing: boolean) => void
@@ -402,6 +405,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   apiKeys: {
     groq: '',
     pexels: '',
+    pixabay: '',
     youtube: '',
   },
   isProcessingAudio: false,
@@ -452,17 +456,15 @@ export const useEditorStore = create<EditorStore>((set) => ({
   loadProject: (project) => {
     const videoTracks = normalizeVideoTracks(project.videoTracks)
     const normalizedScenes = normalizeScenes(project.scenes, videoTracks[0].id)
-    const scenes = project.visualGapsFilled
-      ? normalizedScenes
-      : extendVisualScenesAcrossSpeechGaps(
-          normalizedScenes,
-          project.audioFile?.duration ||
-            normalizedScenes.reduce(
-              (maximum, scene) => Math.max(maximum, scene.endTimeSec),
-              0
-            ),
-          videoTracks[0].id
-        )
+    const scenes = extendVisualScenesAcrossSpeechGaps(
+      normalizedScenes,
+      project.audioFile?.duration ||
+        normalizedScenes.reduce(
+          (maximum, scene) => Math.max(maximum, scene.endTimeSec),
+          0
+        ),
+      videoTracks[0].id
+    )
     const subtitles = project.subtitles?.length ? project.subtitles : subtitlesFromScenes(scenes)
     set({
       screen: 'editor',
@@ -991,24 +993,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
             sourceStartSec: media.sourceStartSec ?? 0,
             sourceDurationSec: media.sourceDurationSec ?? media.durationSec,
           }
-          const isImage =
-            normalizedMedia.type === 'local_image' ||
-            normalizedMedia.type === 'remote_image' ||
-            normalizedMedia.type === 'motion_graphic'
-          const maximumDuration =
-            !isImage && normalizedMedia.sourceDurationSec
-              ? Math.max(
-                  1 / 30,
-                  normalizedMedia.sourceDurationSec -
-                    (normalizedMedia.sourceStartSec ?? 0)
-                )
-              : Number.POSITIVE_INFINITY
-          const durationSec = Math.min(scene.durationSec, maximumDuration)
           return {
             ...scene,
             media: normalizedMedia,
-            durationSec,
-            endTimeSec: scene.startTimeSec + durationSec,
           }
         }),
       })

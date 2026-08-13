@@ -30,6 +30,7 @@ import {
 } from '../../types/editor'
 import { MainComposition } from '../../remotion/Composition'
 import { selectPexelsVideoSources } from '../../core/media/pexelsVideoFiles'
+import { recommendedSearchKeywords } from '../../core/scenes/searchKeywords'
 import {
   fileForSource,
   hydrateMediaSources,
@@ -47,7 +48,7 @@ const SETTINGS_KEY = 'rhymx.web.settings'
 const REMEMBERED_KEYS_KEY = 'rhymx.web.apiKeys.remembered'
 const SESSION_KEYS_KEY = 'rhymx.web.apiKeys.session'
 const MOTION_RENDERER_ORIGIN = 'http://127.0.0.1:43127'
-const API_KEY_PROVIDERS: ApiKeyProvider[] = ['groq', 'pexels', 'youtube']
+const API_KEY_PROVIDERS: ApiKeyProvider[] = ['groq', 'pexels', 'pixabay', 'youtube']
 const exportTargets = new Map<string, FileSystemFileHandle>()
 const batchTargets = new Map<string, FileSystemDirectoryHandle>()
 let exportController: AbortController | null = null
@@ -277,7 +278,7 @@ function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], durati
       endTimeSec: Number(segment.end || duration),
       durationSec: Math.max(1 / 30, Number(segment.end || duration) - Number(segment.start || 0)),
       transcriptText: String(segment.text || '').trim(),
-      keywords: [],
+      keywords: recommendedSearchKeywords(String(segment.text || '')),
       media: null,
       trackId: 'track_main',
       volume: 1,
@@ -303,7 +304,7 @@ function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], durati
     endTimeSec: items[items.length - 1].end,
     durationSec: items[items.length - 1].end - items[0].start,
     transcriptText: items.map((item) => item.text).join(' ').replace(/\s+([,.;:!?])/g, '$1'),
-    keywords: [],
+    keywords: recommendedSearchKeywords(items.map((item) => item.text).join(' ')),
     media: null,
     trackId: 'track_main',
     volume: 1,
@@ -318,8 +319,21 @@ function scenesFromTranscript(words: GroqWord[], segments: GroqSegment[], durati
   }))
 }
 
+function providerWorkerOrigin() {
+  const configured = String(
+    (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
+      ?.VITE_RHYMX_PROVIDER_WORKER_URL || ''
+  ).trim()
+  if (configured) return configured.replace(/\/$/, '')
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    ? ''
+    : window.location.origin
+}
+
 async function backendRequest<T>(path: string, init?: RequestInit) {
-  const response = await fetch(path, init)
+  const origin = providerWorkerOrigin()
+  if (!origin) throw new Error('The hosted provider service is not configured for local development.')
+  const response = await fetch(`${origin}${path}`, init)
   if (!response.ok) {
     const body = await response.text()
     let message = body
@@ -374,7 +388,10 @@ async function transcribeAudio(source: string, suppliedApiKey = '') {
     }
     scenes = scenes.map((scene, index) => ({
       ...scene,
-      keywords: keywordResult.keywords?.[index]?.slice(0, 3) || [],
+      keywords: recommendedSearchKeywords(
+        scene.transcriptText,
+        keywordResult.keywords?.[index] || []
+      ),
       suggestedTreatment: keywordResult.treatments?.[index] || 'media',
     }))
   } catch (error) {
@@ -501,8 +518,7 @@ async function searchYouTube(query: string, apiKey: string): Promise<YouTubeSear
 }
 
 async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResponse> {
-  const localHostname = ['localhost', '127.0.0.1'].includes(window.location.hostname)
-  if (!localHostname) {
+  if (providerWorkerOrigin()) {
     try {
       return await backendRequest<MediaSearchResponse>('/api/media/search', {
         method: 'POST',
@@ -512,8 +528,8 @@ async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResp
         },
         body: JSON.stringify(request),
       })
-    } catch {
-      // A static or disconnected deployment can still use BYOK and keyless sources.
+    } catch (error) {
+      console.warn('Hosted provider search was unavailable; using browser adapters.', error)
     }
   }
   return localMediaSearch(request)
@@ -522,14 +538,23 @@ async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResp
 async function resolveMedia(candidate: MediaCandidate) {
   if (candidate.downloadUrl) return candidate
   if (['pexels', 'wikimedia'].includes(candidate.provider)) return candidate
-  return backendRequest<MediaCandidate>('/api/media/resolve', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Rhymx-Actor': anonymousActorId(),
-    },
-    body: JSON.stringify({ candidate }),
-  })
+  if (providerWorkerOrigin()) {
+    try {
+      return await backendRequest<MediaCandidate>('/api/media/resolve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rhymx-Actor': anonymousActorId(),
+        },
+        body: JSON.stringify({ candidate }),
+      })
+    } catch (error) {
+      console.warn('Hosted media resolution was unavailable; using a browser adapter.', error)
+    }
+  }
+  if (candidate.provider === 'archive_org') return localResolveArchive(candidate)
+  if (candidate.provider === 'nasa') return localResolveNasa(candidate)
+  return candidate
 }
 
 async function localPexelsCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
@@ -628,6 +653,234 @@ async function localPexelsCandidates(request: MediaSearchRequest): Promise<Media
   return candidates
 }
 
+async function localPixabayCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
+  const key = apiKeyFor('pixabay')
+  if (!key) throw new Error('Add a Pixabay API key in Settings to search Pixabay locally.')
+  const page = Math.max(1, request.page || 1)
+  const orientation = request.orientation === 'landscape'
+    ? 'horizontal'
+    : request.orientation === 'portrait'
+      ? 'vertical'
+      : 'all'
+  const license = (creator?: string) => ({
+    name: 'Pixabay Content License',
+    url: 'https://pixabay.com/service/license-summary/',
+    attributionRequired: false,
+    attributionText: creator ? `Media by ${creator} on Pixabay` : undefined,
+  })
+  const candidates: MediaCandidate[] = []
+
+  if (request.kind !== 'video') {
+    const endpoint = new URL('https://pixabay.com/api/')
+    endpoint.search = new URLSearchParams({
+      key,
+      q: request.query.slice(0, 100),
+      per_page: '24',
+      page: String(page),
+      safesearch: 'true',
+      image_type: 'photo',
+      orientation,
+    }).toString()
+    const response = await fetch(endpoint)
+    if (!response.ok) throw new Error(`Pixabay image search failed (${response.status}).`)
+    const body = (await response.json()) as {
+      hits?: Array<{
+        id: number
+        tags?: string
+        webformatURL?: string
+        previewURL?: string
+        largeImageURL?: string
+        pageURL: string
+        imageWidth?: number
+        imageHeight?: number
+        imageSize?: number
+        user?: string
+        user_id?: number
+      }>
+    }
+    for (const hit of body.hits || []) {
+      const source = hit.largeImageURL || hit.webformatURL
+      if (!source) continue
+      candidates.push({
+        id: String(hit.id),
+        provider: 'pixabay',
+        kind: 'image',
+        title: hit.tags || request.query,
+        thumbnailUrl: hit.webformatURL || hit.previewURL || source,
+        previewUrl: hit.webformatURL || source,
+        downloadUrl: source,
+        landingPageUrl: hit.pageURL,
+        width: hit.imageWidth,
+        height: hit.imageHeight,
+        fileSizeBytes: hit.imageSize,
+        creator: hit.user,
+        creatorUrl: hit.user_id && hit.user
+          ? `https://pixabay.com/users/${hit.user}-${hit.user_id}/`
+          : undefined,
+        license: license(hit.user),
+        compatibility: 'ready',
+      })
+    }
+  }
+
+  if (request.kind !== 'image') {
+    const endpoint = new URL('https://pixabay.com/api/videos/')
+    endpoint.search = new URLSearchParams({
+      key,
+      q: request.query.slice(0, 100),
+      per_page: '24',
+      page: String(page),
+      safesearch: 'true',
+    }).toString()
+    const response = await fetch(endpoint)
+    if (!response.ok) throw new Error(`Pixabay video search failed (${response.status}).`)
+    const body = (await response.json()) as {
+      hits?: Array<{
+        id: number
+        tags?: string
+        pageURL: string
+        duration?: number
+        picture_id?: string
+        user?: string
+        user_id?: number
+        videos?: Record<string, { url?: string; width?: number; height?: number; size?: number }>
+      }>
+    }
+    for (const hit of body.hits || []) {
+      const rendition = hit.videos?.large || hit.videos?.medium || hit.videos?.small
+      const preview = hit.videos?.small || hit.videos?.medium || rendition
+      if (!rendition?.url) continue
+      candidates.push({
+        id: String(hit.id),
+        provider: 'pixabay',
+        kind: 'video',
+        title: hit.tags || request.query,
+        thumbnailUrl: hit.picture_id
+          ? `https://i.vimeocdn.com/video/${hit.picture_id}_640x360.jpg`
+          : '',
+        previewUrl: preview?.url || rendition.url,
+        downloadUrl: rendition.url,
+        landingPageUrl: hit.pageURL,
+        width: rendition.width,
+        height: rendition.height,
+        durationSec: hit.duration,
+        fileSizeBytes: rendition.size,
+        creator: hit.user,
+        creatorUrl: hit.user_id && hit.user
+          ? `https://pixabay.com/users/${hit.user}-${hit.user_id}/`
+          : undefined,
+        license: license(hit.user),
+        compatibility: 'ready',
+      })
+    }
+  }
+
+  return candidates
+}
+
+async function localArchiveCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
+  const endpoint = new URL('https://archive.org/advancedsearch.php')
+  const mediaClause = request.kind === 'image'
+    ? 'mediatype:image'
+    : request.kind === 'video'
+      ? 'mediatype:movies'
+      : '(mediatype:movies OR mediatype:image)'
+  endpoint.searchParams.set('q', `(${request.query}) AND ${mediaClause}`)
+  for (const field of ['identifier', 'title', 'creator', 'mediatype', 'licenseurl']) {
+    endpoint.searchParams.append('fl[]', field)
+  }
+  endpoint.searchParams.set('rows', '24')
+  endpoint.searchParams.set('page', String(Math.max(1, request.page || 1)))
+  endpoint.searchParams.set('output', 'json')
+  endpoint.searchParams.append('sort[]', 'downloads desc')
+  const response = await fetch(endpoint)
+  if (!response.ok) throw new Error(`Archive.org search failed (${response.status}).`)
+  const body = (await response.json()) as {
+    response?: {
+      docs?: Array<{
+        identifier: string
+        title?: string
+        creator?: string | string[]
+        mediatype?: string
+        licenseurl?: string | string[]
+      }>
+    }
+  }
+  return (body.response?.docs || []).map((item) => {
+    const licenseUrl = Array.isArray(item.licenseurl) ? item.licenseurl[0] : item.licenseurl
+    return {
+      id: item.identifier,
+      provider: 'archive_org' as const,
+      kind: item.mediatype === 'image' ? 'image' as const : 'video' as const,
+      title: item.title || item.identifier,
+      thumbnailUrl: `https://archive.org/services/img/${encodeURIComponent(item.identifier)}`,
+      previewUrl: `https://archive.org/services/img/${encodeURIComponent(item.identifier)}`,
+      landingPageUrl: `https://archive.org/details/${encodeURIComponent(item.identifier)}`,
+      creator: Array.isArray(item.creator) ? item.creator.join(', ') : item.creator,
+      license: licenseUrl
+        ? {
+            name: 'Declared on Archive.org',
+            url: licenseUrl,
+            attributionRequired: true,
+            warning: 'Review the item page because Archive.org hosts material under varied licenses.',
+          }
+        : {
+            name: 'Unknown — verify before publishing',
+            attributionRequired: true,
+            warning: 'No machine-readable license was declared for this item.',
+          },
+      compatibility: 'resolve' as const,
+    }
+  })
+}
+
+async function localNasaCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
+  const endpoint = new URL('https://images-api.nasa.gov/search')
+  endpoint.searchParams.set('q', request.query)
+  endpoint.searchParams.set('page', String(Math.max(1, request.page || 1)))
+  if (request.kind !== 'all' && request.kind) endpoint.searchParams.set('media_type', request.kind)
+  const response = await fetch(endpoint)
+  if (!response.ok) throw new Error(`NASA media search failed (${response.status}).`)
+  const body = (await response.json()) as {
+    collection?: {
+      items?: Array<{
+        data?: Array<{
+          nasa_id?: string
+          media_type?: string
+          title?: string
+          photographer?: string
+          center?: string
+        }>
+        links?: Array<{ render?: string; href?: string }>
+      }>
+    }
+  }
+  return (body.collection?.items || []).slice(0, 24).flatMap((item) => {
+    const metadata = item.data?.[0]
+    if (!metadata?.nasa_id || !['image', 'video'].includes(metadata.media_type || '')) return []
+    const preview = item.links?.find((link) => link.render === 'image')?.href || ''
+    const kind = metadata.media_type as 'image' | 'video'
+    return [{
+      id: metadata.nasa_id,
+      provider: 'nasa' as const,
+      kind,
+      title: metadata.title || metadata.nasa_id,
+      thumbnailUrl: preview,
+      previewUrl: preview,
+      downloadUrl: kind === 'image' ? preview : undefined,
+      landingPageUrl: `https://images.nasa.gov/details/${encodeURIComponent(metadata.nasa_id)}`,
+      creator: metadata.photographer || metadata.center,
+      license: {
+        name: 'NASA media usage guidelines',
+        url: 'https://www.nasa.gov/nasa-brand-center/images-and-media/',
+        attributionRequired: false,
+        warning: 'Logos, identifiable people, endorsement, and third-party material require extra review.',
+      },
+      compatibility: kind === 'image' ? 'ready' as const : 'resolve' as const,
+    }]
+  })
+}
+
 async function localWikimediaCandidates(request: MediaSearchRequest): Promise<MediaCandidate[]> {
   if (request.kind === 'video') return []
   const images = await searchWikimedia(request.query)
@@ -650,17 +903,69 @@ async function localWikimediaCandidates(request: MediaSearchRequest): Promise<Me
   }))
 }
 
+async function localResolveArchive(candidate: MediaCandidate): Promise<MediaCandidate> {
+  const response = await fetch(`https://archive.org/metadata/${encodeURIComponent(candidate.id)}`)
+  if (!response.ok) throw new Error(`Archive.org metadata lookup failed (${response.status}).`)
+  const metadata = (await response.json()) as {
+    files?: Array<{ name?: string; size?: string | number }>
+  }
+  const files = (metadata.files || []).filter(
+    (file) => file.name && Number(file.size || 0) <= 500 * 1024 * 1024
+  )
+  const compatible = candidate.kind === 'video'
+    ? files
+        .filter((file) => /\.mp4$/i.test(file.name || '') && !/thumb|sample/i.test(file.name || ''))
+        .sort((first, second) => Number(first.size || 0) - Number(second.size || 0))
+    : files
+        .filter((file) => /\.(jpe?g|png|webp)$/i.test(file.name || '') && !/thumb/i.test(file.name || ''))
+        .sort((first, second) => Number(second.size || 0) - Number(first.size || 0))
+  const file = compatible[0]
+  if (!file?.name) throw new Error('Archive.org did not provide a browser-compatible rendition under 500 MB.')
+  const encodedName = file.name.split('/').map(encodeURIComponent).join('/')
+  const downloadUrl = `https://archive.org/download/${encodeURIComponent(candidate.id)}/${encodedName}`
+  return {
+    ...candidate,
+    downloadUrl,
+    previewUrl: candidate.kind === 'video' ? downloadUrl : candidate.previewUrl,
+    fileSizeBytes: Number(file.size || 0),
+    compatibility: 'ready',
+  }
+}
+
+async function localResolveNasa(candidate: MediaCandidate): Promise<MediaCandidate> {
+  if (candidate.kind === 'image' && candidate.downloadUrl) return candidate
+  const response = await fetch(`https://images-api.nasa.gov/asset/${encodeURIComponent(candidate.id)}`)
+  if (!response.ok) throw new Error(`NASA media lookup failed (${response.status}).`)
+  const manifest = (await response.json()) as {
+    collection?: { items?: Array<{ href?: string }> }
+  }
+  const links = (manifest.collection?.items || []).flatMap((item) => item.href ? [item.href] : [])
+  const downloadUrl =
+    links.find((link) => /~orig\.(mp4|webm)$/i.test(link)) ||
+    links.find((link) => /\.(mp4|webm)$/i.test(link)) ||
+    links.find((link) => /\.(jpe?g|png)$/i.test(link))
+  if (!downloadUrl) throw new Error('NASA did not return a browser-compatible rendition for this asset.')
+  return {
+    ...candidate,
+    downloadUrl,
+    previewUrl: candidate.kind === 'video' ? downloadUrl : candidate.previewUrl,
+    compatibility: 'ready',
+  }
+}
+
 async function localMediaSearch(request: MediaSearchRequest): Promise<MediaSearchResponse> {
   const providers: MediaProvider[] = request.providers?.length
     ? request.providers
-    : ['pexels', 'wikimedia']
+    : ['pexels', 'pixabay', 'archive_org', 'nasa', 'wikimedia']
   const candidates: MediaCandidate[] = []
   const errors: MediaSearchResponse['errors'] = []
   for (const provider of providers) {
     try {
       if (provider === 'pexels') candidates.push(...await localPexelsCandidates(request))
+      else if (provider === 'pixabay') candidates.push(...await localPixabayCandidates(request))
+      else if (provider === 'archive_org') candidates.push(...await localArchiveCandidates(request))
+      else if (provider === 'nasa') candidates.push(...await localNasaCandidates(request))
       else if (provider === 'wikimedia') candidates.push(...await localWikimediaCandidates(request))
-      else errors.push({ provider, message: `${provider} requires the hosted provider worker in this branch.` })
     } catch (error) {
       errors.push({ provider, message: error instanceof Error ? error.message : String(error) })
     }
@@ -799,8 +1104,10 @@ async function acquireMedia(candidate: MediaCandidate) {
   try {
     response = await fetch(resolved.downloadUrl || resolved.previewUrl)
     if (!response.ok) throw new Error('Direct acquisition failed.')
-  } catch {
-    response = await fetch('/api/media/relay', {
+  } catch (directError) {
+    const origin = providerWorkerOrigin()
+    if (!origin) throw directError
+    response = await fetch(`${origin}/api/media/relay`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -895,6 +1202,8 @@ async function testApiKey(provider: ApiKeyProvider, suppliedKey: string): Promis
       response = await fetch(`${GROQ_ROOT}/models`, { headers: { Authorization: `Bearer ${key}` } })
     } else if (provider === 'pexels') {
       response = await fetch('https://api.pexels.com/v1/curated?per_page=1', { headers: { Authorization: key } })
+    } else if (provider === 'pixabay') {
+      response = await fetch(`https://pixabay.com/api/?key=${encodeURIComponent(key)}&per_page=3&safesearch=true`)
     } else {
       response = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${encodeURIComponent(key)}`)
     }
@@ -918,6 +1227,7 @@ async function testApiKey(provider: ApiKeyProvider, suppliedKey: string): Promis
 function providerLabel(provider: ApiKeyProvider) {
   if (provider === 'groq') return 'Groq'
   if (provider === 'pexels') return 'Pexels'
+  if (provider === 'pixabay') return 'Pixabay'
   return 'YouTube'
 }
 
@@ -1358,6 +1668,8 @@ const api: RhymxPlatformAPI = {
   onBatchExportProgress: (callback) => { batchListener = callback },
   getPexelsKey: async () => apiKeyFor('pexels') || null,
   setPexelsKey: async (key) => { setStoredApiKey('pexels', key) },
+  getPixabayKey: async () => apiKeyFor('pixabay') || null,
+  setPixabayKey: async (key) => { setStoredApiKey('pixabay', key) },
   getGroqKey: async () => apiKeyFor('groq') || null,
   setGroqKey: async (key) => { setStoredApiKey('groq', key) },
   getYouTubeKey: async () => apiKeyFor('youtube') || null,

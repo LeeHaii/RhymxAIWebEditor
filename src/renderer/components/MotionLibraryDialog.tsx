@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react'
+import { Player } from '@remotion/player'
 import { Layers3, Sparkles, X } from 'lucide-react'
 import { motionTemplates } from '../../motion/templates'
-import { MotionTemplateManifest } from '../../types/editor'
+import { MotionTemplateManifest, SceneSegment } from '../../types/editor'
 import { useEditorStore } from '../../store/useEditorStore'
+import { MainComposition } from '../../remotion/Composition'
 
 export default function MotionLibraryDialog({ onClose }: { onClose: () => void }) {
   const activeSceneId = useEditorStore((state) => state.activeSceneId)
@@ -21,6 +23,34 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
   const values = valuesByTemplate[template.id] || Object.fromEntries(
     template.fields.map((field) => [field.id, field.defaultValue])
   )
+  const previewScene = useMemo<SceneSegment>(() => ({
+    id: `motion-preview:${template.id}`,
+    startTimeSec: 0,
+    endTimeSec: template.defaultDurationSec,
+    durationSec: template.defaultDurationSec,
+    transcriptText: template.name,
+    keywords: [],
+    media: {
+      id: `motion-preview:${template.id}`,
+      type: 'motion_graphic',
+      kind: 'video',
+      sourceUrl: `rhymx-motion:${template.id}`,
+      thumbnailUrl: '',
+      title: template.name,
+      motion: {
+        templateId: template.id,
+        templateVersion: template.version,
+        engine: template.engine,
+        values,
+        accentColor: String(values.accent || '#8b5cf6'),
+      },
+    },
+    trackId: 'motion-preview',
+    volume: 0,
+    scale: 1,
+    opacity: 1,
+    suggestedTreatment: 'motion',
+  }), [template, values])
 
   const updateValue = (fieldId: string, value: string | number | boolean) => {
     setValuesByTemplate((current) => ({
@@ -128,6 +158,35 @@ export default function MotionLibraryDialog({ onClose }: { onClose: () => void }
           </div>
           <aside className="border-l border-white/8 p-5 overflow-y-auto custom-scrollbar bg-black/10">
             <div className="flex items-center gap-2 mb-5"><Layers3 className="h-4 w-4 text-violet-300" /><h3 className="font-medium">{template.name}</h3></div>
+            <div className="mb-5">
+              <div className="mb-2 flex items-center justify-between text-[9px] uppercase tracking-[.16em] text-slate-600">
+                <span>Live preview</span>
+                <span>{template.defaultDurationSec}s loop</span>
+              </div>
+              <div className="aspect-video overflow-hidden rounded-xl border border-white/10 bg-black shadow-xl">
+                <Player
+                  key={template.id}
+                  component={MainComposition}
+                  inputProps={{
+                    scenes: [previewScene],
+                    subtitles: [],
+                    audioPath: '',
+                    audioClips: [],
+                    videoTracks: [{ id: 'motion-preview', name: 'Preview', muted: true, visible: true }],
+                    mediaMode: 'preview',
+                  }}
+                  durationInFrames={Math.max(1, Math.round(template.defaultDurationSec * 30))}
+                  fps={30}
+                  compositionWidth={1920}
+                  compositionHeight={1080}
+                  style={{ width: '100%', height: '100%' }}
+                  autoPlay
+                  loop
+                  controls
+                />
+              </div>
+              {template.engine === 'hyperframes' && <p className="mt-2 text-[9px] leading-4 text-slate-600">This editable browser preview is used until the local HyperFrames render finishes.</p>}
+            </div>
             <div className="space-y-4">
               {template.fields.map((field) => (
                 <label key={field.id} className="block text-[10px] text-slate-500">

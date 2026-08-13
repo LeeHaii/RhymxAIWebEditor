@@ -425,6 +425,7 @@ export default function ContextInspector() {
       ) : (
         <>
           <div className="p-3 border-b border-white/5 bg-[#0e1016]">
+            <div className="mb-1.5 text-[8px] uppercase tracking-[.16em] text-slate-600">Recommended search keywords</div>
             <div className="flex flex-wrap gap-1.5 mb-3">
               {activeScene.keywords.map((keyword) => (
                 <button
