@@ -129,12 +129,12 @@ async function searchPixabay(input, env) {
     url.search = new URLSearchParams({ key: env.PIXABAY_API_KEY, q: input.query, per_page: input.kind === 'all' ? '10' : '24', page: String(page), safesearch: 'true' }).toString()
     const data = await fetchJson(url)
     for (const hit of data.hits || []) {
-      const rendition = hit.videos?.large || hit.videos?.medium || hit.videos?.small
-      const preview = hit.videos?.small || hit.videos?.medium || rendition
+      const rendition = [hit.videos?.large, hit.videos?.medium, hit.videos?.small, hit.videos?.tiny].find((candidate) => candidate?.url)
+      const preview = [hit.videos?.tiny, hit.videos?.small, hit.videos?.medium, rendition].find((candidate) => candidate?.url)
       if (!rendition?.url) continue
       candidates.push({
         id: String(hit.id), provider: 'pixabay', kind: 'video', title: hit.tags || input.query,
-        thumbnailUrl: `https://i.vimeocdn.com/video/${hit.picture_id}_640x360.jpg`, previewUrl: preview?.url || rendition.url, downloadUrl: rendition.url,
+        thumbnailUrl: preview?.thumbnail || rendition.thumbnail || '', previewUrl: preview?.url || rendition.url, downloadUrl: rendition.url,
         landingPageUrl: hit.pageURL, width: rendition.width, height: rendition.height, durationSec: hit.duration, fileSizeBytes: rendition.size,
         creator: hit.user, creatorUrl: hit.user_id ? `https://pixabay.com/users/${hit.user}-${hit.user_id}/` : undefined,
         license: pixabayLicense(hit.user), compatibility: 'ready',
@@ -223,7 +223,7 @@ async function mediaSearch(request, env) {
   if (!selected.length) return errorResponse('Choose at least one media provider.')
   const normalized = { query, providers: selected, kind: ['image', 'video'].includes(input.kind) ? input.kind : 'all', orientation: input.orientation || 'any', page: pageFor(input.page) }
   const cache = caches.default
-  const cacheKey = new Request(`https://rhymx-search-cache.invalid/?request=${encodeURIComponent(JSON.stringify(normalized))}`)
+  const cacheKey = new Request(`https://rhymx-search-cache.invalid/?v=2&request=${encodeURIComponent(JSON.stringify(normalized))}`)
   const cached = await cache.match(cacheKey)
   if (cached) return cached
   const started = Date.now()
@@ -413,4 +413,3 @@ export default {
     }
   },
 }
-

@@ -767,21 +767,29 @@ async function localPixabayCandidates(request: MediaSearchRequest): Promise<Medi
         picture_id?: string
         user?: string
         user_id?: number
-        videos?: Record<string, { url?: string; width?: number; height?: number; size?: number }>
+        videos?: Record<string, { url?: string; width?: number; height?: number; size?: number; thumbnail?: string }>
       }>
     }
     for (const hit of body.hits || []) {
-      const rendition = hit.videos?.large || hit.videos?.medium || hit.videos?.small
-      const preview = hit.videos?.small || hit.videos?.medium || rendition
+      const rendition = [
+        hit.videos?.large,
+        hit.videos?.medium,
+        hit.videos?.small,
+        hit.videos?.tiny,
+      ].find((candidate) => Boolean(candidate?.url))
+      const preview = [
+        hit.videos?.tiny,
+        hit.videos?.small,
+        hit.videos?.medium,
+        rendition,
+      ].find((candidate) => Boolean(candidate?.url))
       if (!rendition?.url) continue
       candidates.push({
         id: String(hit.id),
         provider: 'pixabay',
         kind: 'video',
         title: hit.tags || request.query,
-        thumbnailUrl: hit.picture_id
-          ? `https://i.vimeocdn.com/video/${hit.picture_id}_640x360.jpg`
-          : '',
+        thumbnailUrl: preview?.thumbnail || rendition.thumbnail || '',
         previewUrl: preview?.url || rendition.url,
         downloadUrl: rendition.url,
         landingPageUrl: hit.pageURL,

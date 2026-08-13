@@ -16,8 +16,7 @@ import {
   RefreshCw,
   Upload,
 } from 'lucide-react'
-import { ImageSearchResult, MediaAsset, YouTubeSearchResult } from '../../../types/editor'
-import { selectPexelsVideoSources } from '../../../core/media/pexelsVideoFiles'
+import { ImageSearchResult, MediaAsset, MediaCandidate, YouTubeSearchResult } from '../../../types/editor'
 import { motionTemplates } from '../../../motion/templates'
 import { useEditorStore } from '../../../store/useEditorStore'
 import {
@@ -32,9 +31,10 @@ import {
   parseCaptions,
   saveCaptionFile,
 } from '../../utils/captions'
+import MediaCandidatePreview from '../MediaCandidatePreview'
 
 type InspectorTab = 'properties' | 'media' | 'subtitles'
-type SearchTab = 'duckduckgo' | 'pexels-image' | 'pexels-video' | 'youtube'
+type SearchTab = 'duckduckgo' | 'open-image' | 'open-video' | 'youtube'
 
 export default function ContextInspector() {
   const {
@@ -88,7 +88,8 @@ export default function ContextInspector() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const [selectedYoutube, setSelectedYoutube] = useState<YouTubeSearchResult | null>(null)
-  const [selectedPexels, setSelectedPexels] = useState<any | null>(null)
+  const [selectedOpenMedia, setSelectedOpenMedia] = useState<MediaCandidate | null>(null)
+  const [openMediaBusy, setOpenMediaBusy] = useState(false)
   const [ytStart, setYtStart] = useState(0)
   const [isTrimming, setIsTrimming] = useState(false)
   const [trimProgress, setTrimProgress] = useState<number | null>(null)
@@ -113,7 +114,7 @@ export default function ContextInspector() {
     setSearchError(null)
     setHasSearched(false)
     setSelectedYoutube(null)
-    setSelectedPexels(null)
+    setSelectedOpenMedia(null)
     setYtStart(0)
     setTrimProgress(null)
     setYoutubePreviewTime(null)
@@ -182,24 +183,22 @@ export default function ContextInspector() {
     setSearchError(null)
     setHasSearched(true)
     setSelectedYoutube(null)
-    setSelectedPexels(null)
+    setSelectedOpenMedia(null)
 
     try {
       if (activeTab === 'duckduckgo') {
         setResults(await window.rhymx.searchDuckDuckGoImages(query))
-      } else if (activeTab === 'pexels-image') {
-        setResults(await window.rhymx.searchImages(query, apiKeys.pexels))
-      } else if (activeTab === 'pexels-video') {
-        if (!apiKeys.pexels.trim()) {
-          throw new Error('Add a Pexels API key in Settings before searching Pexels Video.')
+      } else if (activeTab === 'open-image' || activeTab === 'open-video') {
+        const response = await window.rhymx.searchMedia({
+          query,
+          providers: ['pexels', 'pixabay'],
+          kind: activeTab === 'open-image' ? 'image' : 'video',
+          orientation: 'landscape',
+        })
+        setResults(response.candidates)
+        if (response.errors.length && response.candidates.length === 0) {
+          throw new Error(response.errors.map((error) => error.message).join(' · '))
         }
-        const response = await fetch(
-          `https://api.pexels.com/v1/videos/search?query=${encodeURIComponent(query)}&per_page=12&orientation=landscape&size=medium`,
-          { headers: { Authorization: apiKeys.pexels.trim() } }
-        )
-        if (!response.ok) throw new Error(`Pexels search failed (${response.status}).`)
-        const data = await response.json()
-        setResults(data.videos || [])
       } else {
         setResults(await window.rhymx.searchYouTube(query, apiKeys.youtube))
       }
@@ -228,36 +227,35 @@ export default function ContextInspector() {
     })
   }
 
-  const applyPexels = (video: any) => {
+  const applyOpenMedia = async (candidate: MediaCandidate) => {
     if (!activeSceneId) return
-    const sources = selectPexelsVideoSources(video?.video_files)
-    if (!sources.sourceUrl) return
-    assignMediaToScene(activeSceneId, {
-      id: `pex_${video.id}`,
-      type: 'remote_video',
-      sourceUrl: sources.sourceUrl,
-      previewSourceUrl: sources.previewSourceUrl,
-      thumbnailUrl: video.image,
-      title: video.user?.name || video.url,
-      sourceStartSec: 0,
-      sourceDurationSec: Number(video.duration) || activeScene?.durationSec,
-      providerUrl: video.url,
-      creatorName: video.user?.name,
-      creatorUrl: video.user?.url,
-      provenance: {
-        provider: 'pexels',
-        sourceId: String(video.id),
-        landingPageUrl: video.url,
-        creator: video.user?.name,
-        creatorUrl: video.user?.url,
-        license: {
-          name: 'Pexels license',
-          url: 'https://www.pexels.com/license/',
-          attributionRequired: false,
-          attributionText: video.user?.name ? `Video by ${video.user.name} on Pexels` : undefined,
-        },
-      },
-    })
+    setOpenMediaBusy(true)
+    setSearchError(null)
+    try {
+      const asset = await window.rhymx.acquireMedia(candidate)
+      addMediaAssets([asset])
+      assignMediaToScene(activeSceneId, {
+        id: asset.id,
+        type: candidate.kind === 'video' ? 'local_video' : 'local_image',
+        kind: candidate.kind,
+        sourceUrl: asset.path,
+        thumbnailUrl: candidate.thumbnailUrl,
+        title: candidate.title,
+        durationSec: candidate.durationSec,
+        sourceStartSec: 0,
+        sourceDurationSec: candidate.durationSec,
+        imageFit: 'cover',
+        enableKenBurnsEffect: candidate.kind === 'image',
+        providerUrl: candidate.landingPageUrl,
+        creatorName: candidate.creator,
+        creatorUrl: candidate.creatorUrl,
+        provenance: asset.provenance,
+      })
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpenMediaBusy(false)
+    }
   }
 
   const handleYoutubeTrim = async () => {
@@ -459,8 +457,8 @@ export default function ContextInspector() {
           <div className="grid grid-cols-4 border-b border-white/5">
             {([
               ['duckduckgo', ImageIcon, 'DuckDuckGo'],
-              ['pexels-image', ImageIcon, 'Pexels Img'],
-              ['pexels-video', Video, 'Pexels Vid'],
+              ['open-image', ImageIcon, 'Open Img'],
+              ['open-video', Video, 'Open Vid'],
               ['youtube', Youtube, 'YouTube'],
             ] as const).map(([tab, Icon, label]) => (
               <button
@@ -470,7 +468,7 @@ export default function ContextInspector() {
                   setResults([])
                   setHasSearched(false)
                   setSearchError(null)
-                  setSelectedPexels(null)
+                  setSelectedOpenMedia(null)
                   setSelectedYoutube(null)
                 }}
                 className={`min-w-0 py-2 text-[9px] flex flex-col items-center gap-1 ${
@@ -508,43 +506,47 @@ export default function ContextInspector() {
                   </div>
                 )}
 
-                {(activeTab === 'duckduckgo' || activeTab === 'pexels-image') &&
+                {activeTab === 'duckduckgo' &&
                   (results as ImageSearchResult[]).map((image) => (
                     <ImageResult key={image.id} image={image} onUse={applyImage} />
                   ))}
 
-                {activeTab === 'pexels-video' && selectedPexels && (
-                  <div className="rounded-lg overflow-hidden border border-violet-500/40 bg-black/30">
-                    <video
-                      src={
-                        selectPexelsVideoSources(selectedPexels.video_files)
-                          .previewSourceUrl
-                      }
-                      poster={selectedPexels.image}
-                      controls
-                      className="w-full aspect-video bg-black"
+                {activeTab === 'open-image' &&
+                  (results as MediaCandidate[]).map((candidate) => (
+                    <OpenMediaResult
+                      key={`${candidate.provider}:${candidate.id}`}
+                      candidate={candidate}
+                      busy={openMediaBusy}
+                      onUse={applyOpenMedia}
                     />
+                  ))}
+
+                {activeTab === 'open-video' && selectedOpenMedia && (
+                  <div className="rounded-lg overflow-hidden border border-violet-500/40 bg-black/30">
+                    <MediaCandidatePreview candidate={selectedOpenMedia} className="w-full aspect-video bg-black object-cover" />
                     <button
-                      onClick={() => applyPexels(selectedPexels)}
-                      className="w-full bg-violet-600 hover:bg-violet-500 py-2 text-[10px]"
+                      onClick={() => applyOpenMedia(selectedOpenMedia)}
+                      disabled={openMediaBusy}
+                      className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 py-2 text-[10px]"
                     >
-                      Use this video
+                      {openMediaBusy ? 'Saving video…' : `Use ${selectedOpenMedia.provider === 'pixabay' ? 'Pixabay' : 'Pexels'} video`}
                     </button>
                   </div>
                 )}
 
-                {activeTab === 'pexels-video' &&
-                  results.map((video) => (
+                {activeTab === 'open-video' &&
+                  (results as MediaCandidate[]).map((video) => (
                     <button
-                      key={video.id}
-                      onClick={() => setSelectedPexels(video)}
+                      key={`${video.provider}:${video.id}`}
+                      onClick={() => setSelectedOpenMedia(video)}
                       className={`relative group w-full rounded-lg overflow-hidden border ${
-                        selectedPexels?.id === video.id
+                        selectedOpenMedia?.id === video.id && selectedOpenMedia.provider === video.provider
                           ? 'border-violet-400'
                           : 'border-white/8 hover:border-violet-500/50'
                       }`}
                     >
-                      <img src={video.image} alt="" className="w-full h-36 object-cover" />
+                      <img src={video.thumbnailUrl} alt="" className="w-full h-36 object-cover" />
+                      <span className="absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[8px] capitalize">{video.provider}</span>
                       <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 text-transparent group-hover:text-white text-[10px]">
                         Preview
                       </span>
@@ -1206,6 +1208,33 @@ function ImageResult({
   )
 }
 
+function OpenMediaResult({
+  candidate,
+  busy,
+  onUse,
+}: {
+  candidate: MediaCandidate
+  busy: boolean
+  onUse: (candidate: MediaCandidate) => Promise<void>
+}) {
+  return (
+    <button
+      onClick={() => void onUse(candidate)}
+      disabled={busy}
+      className="relative group w-full text-left rounded-lg overflow-hidden border border-white/8 hover:border-violet-500/50 disabled:opacity-50 bg-black/20"
+    >
+      <MediaCandidatePreview candidate={candidate} className="w-full h-36 object-cover" />
+      <div className="p-2">
+        <div className="text-[10px] text-slate-300 truncate">{candidate.title}</div>
+        <div className="text-[9px] text-slate-600 capitalize mt-0.5">{candidate.provider}</div>
+      </div>
+      <span className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-violet-600 rounded px-2 py-1 text-[9px]">
+        {busy ? 'Saving…' : 'Use image'}
+      </span>
+    </button>
+  )
+}
+
 function EmptyInspector({ text }: { text: string }) {
   return (
     <div className="flex-1 flex items-center justify-center text-slate-500 p-8 text-center text-sm">
@@ -1216,8 +1245,8 @@ function EmptyInspector({ text }: { text: string }) {
 
 function tabLabel(tab: SearchTab) {
   if (tab === 'duckduckgo') return 'DuckDuckGo Images'
-  if (tab === 'pexels-image') return 'Pexels Images'
-  if (tab === 'pexels-video') return 'Pexels Video'
+  if (tab === 'open-image') return 'Open Images'
+  if (tab === 'open-video') return 'Open Videos'
   return 'YouTube'
 }
 
