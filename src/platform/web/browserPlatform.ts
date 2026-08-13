@@ -520,7 +520,7 @@ async function searchYouTube(query: string, apiKey: string): Promise<YouTubeSear
 async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResponse> {
   if (providerWorkerOrigin()) {
     try {
-      return await backendRequest<MediaSearchResponse>('/api/media/search', {
+      const hosted = await backendRequest<MediaSearchResponse>('/api/media/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -528,6 +528,30 @@ async function searchMedia(request: MediaSearchRequest): Promise<MediaSearchResp
         },
         body: JSON.stringify(request),
       })
+      const recoverableProviders = hosted.errors.flatMap((error) =>
+        (error.provider === 'pexels' && apiKeyFor('pexels')) ||
+        (error.provider === 'pixabay' && apiKeyFor('pixabay'))
+          ? [error.provider]
+          : []
+      )
+      if (!recoverableProviders.length) return hosted
+      const local = await localMediaSearch({
+        ...request,
+        providers: recoverableProviders,
+      })
+      const recovered = new Set<MediaProvider>(
+        recoverableProviders.filter((provider) =>
+          local.candidates.some((candidate) => candidate.provider === provider)
+        )
+      )
+      return {
+        candidates: [...hosted.candidates, ...local.candidates],
+        errors: [
+          ...hosted.errors.filter((error) => !recovered.has(error.provider)),
+          ...local.errors,
+        ],
+        nextPage: hosted.nextPage || local.nextPage,
+      }
     } catch (error) {
       console.warn('Hosted provider search was unavailable; using browser adapters.', error)
     }
