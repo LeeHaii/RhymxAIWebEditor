@@ -7,6 +7,12 @@ import { dir as compositorDirectory } from '@remotion/compositor-win32-x64-msvc'
 import { SceneSegment, TranscriptionProgress } from '../../types/editor'
 import { getMediaDuration } from './mediaMetadata'
 import { normalizeTranscriptScenes } from './transcriptTiming'
+import {
+  buildNarrativeContext,
+  buildSceneIntelligenceMessages,
+  parseSceneIntelligence,
+} from '../../core/scenes/sceneIntelligence'
+import { recommendedSearchKeywords } from '../../core/scenes/searchKeywords'
 
 const execFileAsync = promisify(execFile)
 const GROQ_API_ROOT = 'https://api.groq.com/openai/v1'
@@ -812,7 +818,10 @@ async function addSearchKeywords(
   for (let index = 0; index < scenes.length; index += 40) {
     batches.push(scenes.slice(index, index + 40))
   }
-  const keywordMap = new Map<string, string[]>()
+  const suggestionMap = new Map<
+    string,
+    { keywords: string[]; visualIntent: string; treatment: 'media' | 'motion' }
+  >()
 
   for (const [index, batch] of batches.entries()) {
     try {
@@ -825,35 +834,13 @@ async function addSearchKeywords(
           model: KEYWORD_MODEL,
           temperature: 0.1,
           response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Return only a JSON object with a scenes array. Each item must have the supplied id and 2 or 3 concise English stock-video search phrases in keywords. Keep phrases concrete, visual, and searchable.',
-            },
-            {
-              role: 'user',
-              content: JSON.stringify(
-                batch.map(({ id, transcriptText }) => ({ id, transcriptText }))
-              ),
-            },
-          ],
+          messages: buildSceneIntelligenceMessages(scenes, batch),
         }),
       })
       const content = response.choices?.[0]?.message?.content
       if (content) {
-        const parsed = JSON.parse(content) as {
-          scenes?: Array<{ id?: string; keywords?: unknown[] }>
-        }
-        for (const result of parsed.scenes || []) {
-          if (!result.id || !Array.isArray(result.keywords)) continue
-          keywordMap.set(
-            result.id,
-            result.keywords
-              .map((keyword) => String(keyword).trim())
-              .filter(Boolean)
-              .slice(0, 3)
-          )
+        for (const [id, suggestion] of parseSceneIntelligence(content)) {
+          suggestionMap.set(id, suggestion)
         }
       }
     } catch (error) {
@@ -867,10 +854,20 @@ async function addSearchKeywords(
     })
   }
 
-  return scenes.map((scene) => ({
-    ...scene,
-    keywords: keywordMap.get(scene.id) || fallbackKeywords(scene.transcriptText),
-  }))
+  const narrativeContext = buildNarrativeContext(scenes)
+  return scenes.map((scene) => {
+    const suggestion = suggestionMap.get(scene.id)
+    return {
+      ...scene,
+      keywords: recommendedSearchKeywords(
+        scene.transcriptText,
+        suggestion?.keywords || [],
+        narrativeContext
+      ),
+      visualIntent: suggestion?.visualIntent || fallbackKeywords(scene.transcriptText)[0],
+      suggestedTreatment: suggestion?.treatment || 'media',
+    }
+  })
 }
 
 function fallbackKeywords(text: string) {

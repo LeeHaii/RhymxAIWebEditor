@@ -423,6 +423,16 @@ export default function ContextInspector() {
       ) : (
         <>
           <div className="p-3 border-b border-white/5 bg-[#0e1016]">
+            {activeScene.visualIntent && (
+              <div className="mb-3 rounded-xl border border-emerald-500/15 bg-emerald-500/[.06] p-2.5">
+                <div className="text-[8px] uppercase tracking-[.16em] text-emerald-400/70">
+                  Visual direction
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-emerald-100/80">
+                  {activeScene.visualIntent}
+                </p>
+              </div>
+            )}
             <div className="mb-1.5 text-[8px] uppercase tracking-[.16em] text-slate-600">Recommended search keywords</div>
             <div className="flex flex-wrap gap-1.5 mb-3">
               {activeScene.keywords.map((keyword) => (

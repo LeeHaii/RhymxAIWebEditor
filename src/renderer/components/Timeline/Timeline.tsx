@@ -199,6 +199,8 @@ export default function Timeline() {
     () => localStorage.getItem('rhymx.timelineSnap') !== 'false'
   )
   const [snapGuideSec, setSnapGuideSec] = useState<number | null>(null)
+  const [draggingSceneId, setDraggingSceneId] = useState<string | null>(null)
+  const [assetDragTrackId, setAssetDragTrackId] = useState<string | null>(null)
 
   useEffect(() => {
     localStorage.setItem('rhymx.timelineZoom', String(zoom))
@@ -571,6 +573,7 @@ export default function Timeline() {
     const onMove = (moveEvent: globalThis.PointerEvent) => {
       if (!dragging && Math.hypot(moveEvent.clientX - pointerX, moveEvent.clientY - pointerY) > 3) {
         dragging = true
+        setDraggingSceneId(scene.id)
         checkpointHistory()
       }
       if (!dragging) return
@@ -590,11 +593,14 @@ export default function Timeline() {
     const onUp = (upEvent: globalThis.PointerEvent) => {
       if (!dragging) seekAtClientX(upEvent.clientX, upEvent.altKey)
       setSnapGuideSec(null)
+      setDraggingSceneId(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const startAudioDrag = (
@@ -965,16 +971,31 @@ export default function Timeline() {
                     event.preventDefault()
                     event.stopPropagation()
                     event.dataTransfer.dropEffect = 'copy'
+                    setAssetDragTrackId(track.id)
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      event.relatedTarget instanceof Node &&
+                      event.currentTarget.contains(event.relatedTarget)
+                    ) return
+                    setAssetDragTrackId((current) =>
+                      current === track.id ? null : current
+                    )
                   }}
                   onDrop={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
+                    setAssetDragTrackId(null)
                     const asset = droppedAsset(event)
                     if (asset?.kind === 'video' || asset?.kind === 'image') {
                       addSceneFromAsset(asset, track.id, dropTime(event.clientX))
                     }
                   }}
-                  className="absolute left-0 right-0 border-b border-white/5"
+                  className={`absolute left-0 right-0 border-b transition-colors ${
+                    assetDragTrackId === track.id
+                      ? 'border-emerald-400/60 bg-emerald-500/10 ring-1 ring-inset ring-emerald-400/35'
+                      : 'border-white/5'
+                  }`}
                   style={{
                     top: VOICE_HEIGHT + trackIndex * VIDEO_HEIGHT,
                     height: VIDEO_HEIGHT,
@@ -989,8 +1010,10 @@ export default function Timeline() {
                         <div
                           key={scene.id}
                           onPointerDown={(event) => startSceneDrag(event, scene)}
-                          className={`absolute top-1 bottom-1 rounded-md border cursor-grab active:cursor-grabbing overflow-hidden pointer-events-auto ${
-                            selected
+                          className={`absolute top-1 bottom-1 rounded-md border cursor-grab active:cursor-grabbing overflow-hidden pointer-events-auto origin-center transition-[transform,background-color,border-color,box-shadow] duration-150 ${
+                            draggingSceneId === scene.id
+                              ? 'border-emerald-300 bg-emerald-500/45 z-30 scale-[1.035] -translate-y-0.5 shadow-lg shadow-emerald-500/25'
+                              : selected
                               ? 'border-violet-400 bg-violet-600/35 z-20'
                               : 'border-white/10 bg-slate-700/35 hover:bg-slate-700/55'
                           }`}

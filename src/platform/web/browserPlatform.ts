@@ -32,6 +32,11 @@ import { MainComposition } from '../../remotion/Composition'
 import { selectPexelsVideoSources } from '../../core/media/pexelsVideoFiles'
 import { recommendedSearchKeywords } from '../../core/scenes/searchKeywords'
 import {
+  buildNarrativeContext,
+  buildSceneIntelligenceMessages,
+  parseSceneIntelligence,
+} from '../../core/scenes/sceneIntelligence'
+import {
   fileForSource,
   hydrateMediaSources,
   openRhymxDatabase,
@@ -369,7 +374,7 @@ async function transcribeAudio(source: string, suppliedApiKey = '') {
   if (!scenes.length) throw new Error('Groq Whisper returned an empty transcript.')
   transcriptionListener({ stage: 'keywords', completed: 0, total: 1, message: 'Generating visual search phrases' })
   try {
-    const prompt = `Return JSON with two arrays: {"keywords":[["two or three concrete visual search phrases"]],"treatments":["media" or "motion"]}. Keep exactly one entry per scene. Prefer motion only for statistics, quotations, abstract transitions, titles, or calls to action. Scenes: ${JSON.stringify(scenes.map((scene) => scene.transcriptText))}`
+    const messages = buildSceneIntelligenceMessages(scenes)
     const response = await groqRequest<{
       choices?: Array<{ message?: { content?: string } }>
     }>('/chat/completions', apiKey, {
@@ -377,25 +382,44 @@ async function transcribeAudio(source: string, suppliedApiKey = '') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'llama-3.1-8b-instant',
-          temperature: 0.2,
+          temperature: 0.15,
           response_format: { type: 'json_object' },
-          messages: [{ role: 'user', content: prompt }],
+          messages,
         }),
       })
-    const keywordResult = JSON.parse(response.choices?.[0]?.message?.content || '{}') as {
-      keywords?: string[][]
-      treatments?: Array<'media' | 'motion'>
-    }
-    scenes = scenes.map((scene, index) => ({
-      ...scene,
-      keywords: recommendedSearchKeywords(
-        scene.transcriptText,
-        keywordResult.keywords?.[index] || []
-      ),
-      suggestedTreatment: keywordResult.treatments?.[index] || 'media',
-    }))
+    const suggestions = parseSceneIntelligence(
+      response.choices?.[0]?.message?.content || '{}'
+    )
+    const narrativeContext = buildNarrativeContext(scenes)
+    scenes = scenes.map((scene) => {
+      const suggestion = suggestions.get(scene.id)
+      return {
+        ...scene,
+        keywords: recommendedSearchKeywords(
+          scene.transcriptText,
+          suggestion?.keywords || [],
+          narrativeContext
+        ),
+        visualIntent: suggestion?.visualIntent,
+        suggestedTreatment: suggestion?.treatment || 'media',
+      }
+    })
   } catch (error) {
     console.warn('Keyword generation failed; transcription remains usable.', error)
+    const narrativeContext = buildNarrativeContext(scenes)
+    scenes = scenes.map((scene) => {
+      const keywords = recommendedSearchKeywords(
+        scene.transcriptText,
+        [],
+        narrativeContext
+      )
+      return {
+        ...scene,
+        keywords,
+        visualIntent: keywords[0],
+        suggestedTreatment: 'media',
+      }
+    })
   }
   transcriptionListener({ stage: 'keywords', completed: 1, total: 1, message: 'Voiceover analysis complete' })
   return scenes
@@ -1019,7 +1043,10 @@ function scoreCandidate(
   scene: SceneSegment,
   usedProviders: Set<MediaProvider>
 ) {
-  const queryTerms = (scene.keywords.join(' ') || scene.transcriptText)
+  const queryTerms = (
+    [scene.visualIntent, ...scene.keywords].filter(Boolean).join(' ') ||
+    scene.transcriptText
+  )
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((term) => term.length > 2)
@@ -1064,16 +1091,27 @@ async function autoMatchScenes(
   const usedProviders = new Set<MediaProvider>()
   let matched = 0
   for (const [index, scene] of scenes.entries()) {
-    const query = scene.keywords[0] || scene.transcriptText.split(/\s+/).slice(0, 8).join(' ')
+    const queries = [...new Set([
+      ...scene.keywords,
+      scene.visualIntent || '',
+      scene.transcriptText.split(/\s+/).slice(0, 8).join(' '),
+    ].map((query) => query.trim()).filter(Boolean))].slice(0, 2)
+    const query = queries[0]
     try {
-      const response = await searchMedia({
-        query,
+      const responses = await Promise.all(queries.map((searchQuery) => searchMedia({
+        query: searchQuery,
         providers,
         kind: scene.suggestedTreatment === 'motion' ? 'all' : 'video',
         orientation: 'landscape',
-      })
-      const candidates = response.candidates
-        .filter((candidate) => !usedAssetIds.has(`${candidate.provider}:${candidate.id}`))
+      })))
+      const seenCandidateIds = new Set<string>()
+      const candidates = responses.flatMap((response) => response.candidates)
+        .filter((candidate) => {
+          const id = `${candidate.provider}:${candidate.id}`
+          if (usedAssetIds.has(id) || seenCandidateIds.has(id)) return false
+          seenCandidateIds.add(id)
+          return true
+        })
         .map((candidate) => ({
           ...candidate,
           score: scoreCandidate(candidate, scene, usedProviders),
@@ -1088,7 +1126,9 @@ async function autoMatchScenes(
       matches.push({
         sceneId: scene.id,
         query,
+        queries,
         candidates,
+        nextPage: responses[0]?.nextPage,
         confidence:
           (candidates[0]?.score || 0) >= 60
             ? 'strong'

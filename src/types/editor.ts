@@ -214,14 +214,17 @@ export interface SceneSegment {
   scale: number
   opacity: number
   words?: CaptionWord[]
+  visualIntent?: string
   suggestedTreatment?: 'media' | 'motion'
 }
 
 export interface SceneMediaMatch {
   sceneId: string
   query: string
+  queries?: string[]
   candidates: MediaCandidate[]
   confidence: 'strong' | 'review' | 'none'
+  nextPage?: number
 }
 
 export interface ProjectDocument {

@@ -388,6 +388,10 @@ const MotionGraphicContent: React.FC<{ scene: SceneSegment }> = ({ scene }) => {
   const accent = motion.accentColor || String(values.accent || '#8b5cf6')
   const title = String(values.title || values.label || 'Make the idea move')
   const body = String(values.body || values.value || 'Rhymx')
+  const label = String(values.label || 'Rhymx Studio')
+  const items = [values.item1, values.item2, values.item3]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
   const isAdvanced = motion.engine === 'hyperframes'
   const background = isAdvanced
     ? `radial-gradient(circle at ${20 + progress * 50}% 30%, ${accent}66 0%, transparent 34%), linear-gradient(135deg, #070811, #151126 55%, #08090d)`
@@ -416,6 +420,283 @@ const MotionGraphicContent: React.FC<{ scene: SceneSegment }> = ({ scene }) => {
           {title}
         </div>
         <div style={{ color: '#b5bbc9', fontSize: 28, marginTop: 36 }}>{body}</div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'lower_third') {
+    return (
+      <AbsoluteFill
+        style={{
+          background: `linear-gradient(180deg, #07080b 0%, #0b0d12 58%, ${accent}22 100%)`,
+          justifyContent: 'flex-end',
+          padding: 110,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: 760 * eased,
+            height: 8,
+            borderRadius: 99,
+            background: accent,
+            boxShadow: `0 0 42px ${accent}88`,
+          }}
+        />
+        <div
+          style={{
+            marginTop: 26,
+            color: 'white',
+            fontSize: 72,
+            lineHeight: 1,
+            fontWeight: 820,
+            transform: `translateX(${(1 - eased) * -120}px)`,
+            opacity: eased * (1 - exit),
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            marginTop: 16,
+            color: '#aeb5c3',
+            fontSize: 30,
+            letterSpacing: 2,
+            transform: `translateX(${(1 - eased) * -80}px)`,
+            opacity: Math.max(0, eased - 0.15) * (1 - exit),
+          }}
+        >
+          {body}
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'split_comparison') {
+    const cards = [
+      { value: String(values.left || 'Before'), tint: '#ffffff12' },
+      { value: String(values.right || 'After'), tint: `${accent}33` },
+    ]
+    return (
+      <AbsoluteFill style={{ background, padding: 110, justifyContent: 'center' }}>
+        <div style={{ color: 'white', fontSize: 68, fontWeight: 820, marginBottom: 52 }}>
+          {title}
+        </div>
+        <div style={{ display: 'flex', gap: 34 }}>
+          {cards.map((card, index) => {
+            const reveal = Math.max(0, Math.min(1, progress * 1.45 - index * 0.18))
+            return (
+              <div
+                key={card.value}
+                style={{
+                  flex: 1,
+                  minHeight: 330,
+                  borderRadius: 36,
+                  border: `2px solid ${index ? accent : '#ffffff22'}`,
+                  background: card.tint,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 48,
+                  fontWeight: 720,
+                  transform: `translateY(${(1 - reveal) * 90}px) scale(${0.94 + reveal * 0.06})`,
+                  opacity: reveal * (1 - exit),
+                }}
+              >
+                {card.value}
+              </div>
+            )
+          })}
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'checklist') {
+    return (
+      <AbsoluteFill style={{ background, padding: '9% 12%', justifyContent: 'center' }}>
+        <div style={{ color: 'white', fontSize: 72, fontWeight: 840, marginBottom: 48 }}>
+          {title}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+          {items.map((item, index) => {
+            const reveal = Math.max(0, Math.min(1, progress * 1.65 - index * 0.25))
+            return (
+              <div
+                key={item}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 24,
+                  color: '#eef1f7',
+                  fontSize: 38,
+                  transform: `translateX(${(1 - reveal) * 70}px)`,
+                  opacity: reveal * (1 - exit),
+                }}
+              >
+                <span
+                  style={{
+                    width: 54,
+                    height: 54,
+                    borderRadius: 18,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#07110b',
+                    background: accent,
+                    fontWeight: 900,
+                  }}
+                >
+                  {reveal > 0.7 ? '✓' : ''}
+                </span>
+                {item}
+              </div>
+            )
+          })}
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'countdown') {
+    const start = Math.max(1, Math.round(Number(values.value || 5)))
+    const timelineProgress = Math.min(0.999, frame / Math.max(1, scene.durationSec * fps))
+    const count = Math.max(1, start - Math.floor(timelineProgress * start))
+    const pulse = 0.92 + 0.08 * Math.sin((frame / fps) * Math.PI * 2)
+    return (
+      <AbsoluteFill style={{ background, alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#b8bfcc', fontSize: 30, letterSpacing: 7, textTransform: 'uppercase' }}>
+          {title}
+        </div>
+        <div
+          style={{
+            marginTop: 28,
+            width: 360,
+            height: 360,
+            borderRadius: '50%',
+            border: `10px solid ${accent}`,
+            boxShadow: `0 0 100px ${accent}66`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontSize: 210,
+            lineHeight: 1,
+            fontWeight: 900,
+            transform: `scale(${pulse})`,
+          }}
+        >
+          {count}
+        </div>
+        <div style={{ color: '#c4cad5', fontSize: 30, marginTop: 30 }}>{body}</div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'chapter_card') {
+    return (
+      <AbsoluteFill style={{ background, justifyContent: 'center', padding: '10% 12%', overflow: 'hidden' }}>
+        <div
+          style={{
+            position: 'absolute',
+            right: 90,
+            top: -100,
+            color: `${accent}22`,
+            fontSize: 520,
+            fontWeight: 950,
+            lineHeight: 1,
+            transform: `translateX(${(1 - eased) * 180}px)`,
+          }}
+        >
+          {label.replace(/\D/g, '').slice(-2) || '01'}
+        </div>
+        <div style={{ color: accent, fontSize: 24, letterSpacing: 8, textTransform: 'uppercase' }}>
+          {label}
+        </div>
+        <div
+          style={{
+            color: 'white',
+            fontSize: 104,
+            maxWidth: 1300,
+            lineHeight: 0.98,
+            fontWeight: 880,
+            marginTop: 30,
+            opacity: eased * (1 - exit),
+            transform: `translateY(${(1 - eased) * 80}px)`,
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ color: '#adb4c2', fontSize: 32, marginTop: 30, opacity: eased }}>
+          {body}
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'social_callout') {
+    return (
+      <AbsoluteFill style={{ background, alignItems: 'center', justifyContent: 'center', padding: '10%' }}>
+        <div
+          style={{
+            width: '78%',
+            borderRadius: 48,
+            border: `2px solid ${accent}88`,
+            background: '#07080db8',
+            padding: '74px 86px',
+            boxShadow: `0 30px 120px ${accent}33`,
+            transform: `translateY(${(1 - eased) * 100}px) scale(${0.9 + eased * 0.1})`,
+            opacity: eased * (1 - exit),
+          }}
+        >
+          <div style={{ color: accent, fontSize: 28, fontWeight: 780 }}>{label}</div>
+          <div style={{ color: 'white', fontSize: 82, lineHeight: 1, fontWeight: 860, marginTop: 24 }}>
+            {title}
+          </div>
+          <div style={{ color: '#b4bbc8', fontSize: 30, marginTop: 30 }}>{body}</div>
+        </div>
+      </AbsoluteFill>
+    )
+  }
+
+  if (motion.templateId === 'feature_grid') {
+    return (
+      <AbsoluteFill style={{ background, padding: '8% 10%', justifyContent: 'center' }}>
+        <div style={{ color: 'white', fontSize: 70, fontWeight: 850, marginBottom: 48 }}>
+          {title}
+        </div>
+        <div style={{ display: 'flex', gap: 24 }}>
+          {items.map((item, index) => {
+            const reveal = Math.max(0, Math.min(1, progress * 1.55 - index * 0.18))
+            return (
+              <div
+                key={item}
+                style={{
+                  flex: 1,
+                  minHeight: 280,
+                  borderRadius: 32,
+                  border: `1px solid ${accent}66`,
+                  background: index === 1 ? `${accent}28` : '#ffffff0c',
+                  padding: 42,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  color: 'white',
+                  fontSize: 34,
+                  fontWeight: 720,
+                  transform: `translateY(${(1 - reveal) * 80}px)`,
+                  opacity: reveal * (1 - exit),
+                }}
+              >
+                <span style={{ color: accent, fontSize: 22, letterSpacing: 4 }}>
+                  0{index + 1}
+                </span>
+                {item}
+              </div>
+            )
+          })}
+        </div>
       </AbsoluteFill>
     )
   }

@@ -144,8 +144,9 @@ const normalizeSubtitleSettings = (settings?: SubtitleSettings): SubtitleSetting
   ...(settings || {}),
 })
 
-const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): SceneSegment[] =>
-  resolveSceneOverlaps(scenes.map((scene) => {
+const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): SceneSegment[] => {
+  const narrativeContext = scenes.map((scene) => scene.transcriptText).join(' ')
+  return resolveSceneOverlaps(scenes.map((scene) => {
     const media = scene.media
       ? {
           ...scene.media,
@@ -157,7 +158,11 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
     return {
       ...scene,
       media,
-      keywords: recommendedSearchKeywords(scene.transcriptText, scene.keywords || []),
+      keywords: recommendedSearchKeywords(
+        scene.transcriptText,
+        scene.keywords || [],
+        narrativeContext
+      ),
       durationSec,
       endTimeSec: scene.startTimeSec + durationSec,
       trackId: scene.trackId || fallbackTrackId,
@@ -166,6 +171,7 @@ const normalizeScenes = (scenes: SceneSegment[], fallbackTrackId: string): Scene
       opacity: scene.opacity ?? 1,
     }
   }))
+}
 
 export function extendVisualScenesAcrossSpeechGaps(
   scenes: SceneSegment[],

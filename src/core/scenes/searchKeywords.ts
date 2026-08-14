@@ -16,9 +16,24 @@ function cleanPhrase(value: string) {
     .slice(0, 80)
 }
 
+function rankWords(words: string[]) {
+  const counts = new Map<string, number>()
+  const firstIndex = new Map<string, number>()
+  words.forEach((word, index) => {
+    counts.set(word, (counts.get(word) || 0) + 1)
+    if (!firstIndex.has(word)) firstIndex.set(word, index)
+  })
+  return [...counts.keys()].sort(
+    (first, second) =>
+      (counts.get(second) || 0) - (counts.get(first) || 0) ||
+      (firstIndex.get(first) || 0) - (firstIndex.get(second) || 0)
+  )
+}
+
 export function recommendedSearchKeywords(
   transcriptText: string,
-  generated: string[] = []
+  generated: string[] = [],
+  narrativeContext = ''
 ) {
   const recommendations: string[] = []
   const add = (value: string) => {
@@ -31,11 +46,15 @@ export function recommendedSearchKeywords(
   const words = cleanPhrase(transcriptText)
     .split(' ')
     .filter((word) => word.length > 2 && !STOP_WORDS.has(word))
-  const ranked = [...new Set(words)].sort((first, second) => {
-    const frequency = words.filter((word) => word === second).length -
-      words.filter((word) => word === first).length
-    return frequency || words.indexOf(first) - words.indexOf(second)
-  })
+  const ranked = rankWords(words)
+
+  if (!generated.length && narrativeContext) {
+    const contextWords = cleanPhrase(narrativeContext)
+      .split(' ')
+      .filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+    const contextRanked = rankWords(contextWords)
+    add([...contextRanked.slice(0, 2), ...ranked.slice(0, 2)].join(' '))
+  }
 
   add(ranked.slice(0, 4).join(' '))
   add(ranked.slice(0, 2).join(' '))

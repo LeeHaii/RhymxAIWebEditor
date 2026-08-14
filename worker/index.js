@@ -350,10 +350,25 @@ async function keywords(request, env) {
   enforceRateLimit(actor, 'keywords', 30, 60_000)
   if (!env.GROQ_API_KEY) return errorResponse('Groq scene intelligence is not configured on this deployment.', 503)
   const body = await request.json()
-  const scenes = Array.isArray(body.scenes) ? body.scenes.slice(0, 200).map((scene) => String(scene).slice(0, 1500)) : []
+  const scenes = Array.isArray(body.scenes) ? body.scenes.slice(0, 200).map((scene, index) => {
+    if (scene && typeof scene === 'object') {
+      return {
+        id: String(scene.id || `scene_${index + 1}`).slice(0, 120),
+        transcriptText: String(scene.transcriptText || scene.text || '').slice(0, 1500),
+      }
+    }
+    return { id: `scene_${index + 1}`, transcriptText: String(scene).slice(0, 1500) }
+  }).filter((scene) => scene.transcriptText.trim()) : []
   if (!scenes.length) return errorResponse('Provide at least one transcript scene.')
-  const prompt = `Return JSON with two arrays: {"keywords":[["two or three concrete visual search phrases"]],"treatments":["media" or "motion"]}. Keep exactly one entry per scene. Prefer motion only for statistics, quotations, abstract transitions, titles, or calls to action. Scenes: ${JSON.stringify(scenes)}`
-  const response = await timedFetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'llama-3.1-8b-instant', temperature: 0.2, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }) }, 30_000)
+  const fullNarration = scenes.map((scene, index) => `[Scene ${index + 1}] ${scene.transcriptText}`).join('\n').slice(0, 60_000)
+  const plannedScenes = scenes.map((scene, index) => ({
+    ...scene,
+    sceneNumber: index + 1,
+    previousScene: scenes[index - 1]?.transcriptText || '',
+    nextScene: scenes[index + 1]?.transcriptText || '',
+  }))
+  const systemPrompt = 'You are the visual director for one complete narrated video. Understand the full narration, recurring subjects, named entities, setting, tone, and argument before planning individual scenes. For every scene, return a visualIntent describing the shot, not a transcript summary, plus exactly three distinct, concrete English stock-media search phrases using observable subjects, actions, locations, eras, or framing. Resolve pronouns and abstract language from the full narration. Do not merely extract nearby words or invent unsupported people, brands, or events. Use treatment "motion" only for designed typography, statistics, quotations, comparisons, titles, diagrams, transitions, or calls to action; otherwise use "media". Return only JSON: {"scenes":[{"id":"supplied id","visualIntent":"shot direction","keywords":["phrase 1","phrase 2","phrase 3"],"treatment":"media or motion"}]}.'
+  const response = await timedFetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'llama-3.1-8b-instant', temperature: 0.15, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: JSON.stringify({ fullNarration, scenesToPlan: plannedScenes }) }] }) }, 30_000)
   if (!response.ok) return errorResponse(`Groq keyword generation failed (${response.status}).`, 502)
   const result = await response.json()
   try {
